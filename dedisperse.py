@@ -18,10 +18,12 @@ from skimage.measure import block_reduce
 from pathlib import Path
 from ddplan import ddplan
 import utils
+from py_astro_accelerate import *
+import ctypes
 
 #Object to manage the dedispersion of files.
 class Dedispersing_files(object):
-	def __init__(self,config, filename, output_directory, subbanded, nsubint=100, no_rfi_cleaning=False, no_zdot=False):
+	def __init__(self,config, filename, output_directory, subbanded, nsubint=100, no_rfi_cleaning=False, no_zdot=False, use_astro_accelerate=False):
 		self.config 						=		config
 		self.filename 						=		Path(filename)				#Name of file to dedisperse
 		self.root_directory 				=		Path(os.path.dirname(self.filename))		#Base directory where data is saved
@@ -34,6 +36,7 @@ class Dedispersing_files(object):
 		self.number_of_subint				=		nsubint
 		self.no_zdot						=		no_zdot
 		self.no_rfi_cleaning 				= 		no_rfi_cleaning
+		self.use_astro_accelerate			=		use_astro_accelerate
 		self.ddplan_instance 				= 		ddplan(config,'empty',self.subbanded, str(self.filename))
 		self.original_dynamic_spectrum = np.zeros((self.header.nchans,1))
 		self._dm_time_array = np.zeros((1,1))
@@ -194,8 +197,89 @@ class Dedispersing_files(object):
 					group.attrs["dm_step_"+str(dm_step_counter)] = self.ddplan_instance.old_ddplan_dm_step[dm_step_counter]
 					dataset_name = str(dm_step_counter)
 					group.create_dataset(dataset_name,data=self.dm_time_array)
+
+
+	def aa_dedisperse_fil(self,filename):
+		self.calculate_indeces()
+		with h5py.File(filename.replace(str(self.root_directory),str(self.output_directory)).replace("fil","hdf5"),"w") as g:
+			for i in range(len(self.file_indeces)):
+				group_time_0 = time.time()
+				group = g.create_group(str(i))
+				group.attrs["files_dedispersed"] = filename.replace(str(self.root_directory),"")
+				group.attrs["total_length"] = self.number_of_subint
+				group.attrs["length_per_file"] = self.header.tobs
+				
+				sigproc_input = aa_py_sigproc_input(filename)
+				metadata = sigproc_input.read_metadata()
+				if not sigproc_input.read_signal():
+					print("ERROR: Invalid .fil file path. Exiting...")
+					sys.exit()
+				input_buffer = sigproc_input.input_buffer()
+
+				# ddtr_plan settings
+				# settings: aa_py_dm(low, high, step, inBin, outBin)
+				temp_list = []
+				for i in range(len(self.ddplan_instance.old_ddplan_dm_step)):
+					tmp=None
+					if i<1:
+						lowDM = 0
+						highDM = self.ddplan_instance.dm_boundaries[i]
+						tmp = aa_py_dm(lowDM,highDM,self.ddplan_instance.old_ddplan_dm_step[i],1,self.ddplan_instance.old_ddplan_downsampling_factor[i].astype(int)*self.initial_downsampling_factor)
+					else:
+						lowDM = self.ddplan_instance.dm_boundaries[i-1]
+						highDM = self.ddplan_instance.dm_boundaries[i]
+						tmp = aa_py_dm(lowDM,highDM,self.ddplan_instance.old_ddplan_dm_step[i],1,self.ddplan_instance.old_ddplan_downsampling_factor[i].astype(int)*self.initial_downsampling_factor)
+					temp_list.append(tmp)
+				dm_list = np.array(temp_list,dtype=aa_py_dm)
+				# Create ddtr_plan
+				self.ddtr_plan = aa_py_ddtr_plan(dm_list)
+				enable_msd_baseline_noise=True
+				self.ddtr_plan.set_enable_msd_baseline_noise(enable_msd_baseline_noise)
+				self.ddtr_plan.print_info()
+				# Set up pipeline components
+				pipeline_components = aa_py_pipeline_components()
+				pipeline_components.dedispersion = True
+				# Set up pipeline component options	
+				pipeline_options = aa_py_pipeline_component_options()
+				pipeline_options.set_bandpass_average = False
+				pipeline_options.zero_dm = False
+				pipeline_options.zero_dm_with_outliers = False
+				pipeline_options.old_rfi = False
+				pipeline_options.output_dmt = True
+				#Need to be enabled otherwise there will be no data copy from GPU memory to host memory
+				pipeline_options.copy_ddtr_data_to_host = True
+				# Select GPU card number on this machine
+				card_number = 0
+				# Create pipeline
+				pipeline = aa_py_pipeline(pipeline_components, pipeline_options, metadata, input_buffer, card_number)
+				pipeline.bind_ddtr_plan(self.ddtr_plan) # Bind the ddtr_plan
+				# Run the pipeline with AstroAccelerate
+				while (pipeline.run()):
+					print("NOTICE: Python script running over next chunk")
+					if pipeline.status_code() == -1:
+						print("ERROR: Pipeline status code is {}. The pipeline encountered an error and cannot continue.".format(pipeline.status_code()))
+						break
+				# Get the data of DDTR to python
+				(ts_inc, ddtr_output) = pipeline.get_buffer()
+				print("Dedispersion finished, now saving data")
+
+				for dm_step_counter in range(pipeline.ddtr_range()):
+					list_ndms = pipeline.ddtr_ndms()
+					nsamps = int(ts_inc/(self.ddplan_instance.old_ddplan_downsampling_factor[dm_step_counter].astype(int)*self.initial_downsampling_factor))
+					if dm_step_counter < 1:
+						group.attrs["dm_range_"+str(dm_step_counter)] = [0,self.ddplan_instance.dm_boundaries[dm_step_counter]]
+					else:
+						group.attrs["dm_range_"+str(dm_step_counter)] = [self.ddplan_instance.dm_boundaries[dm_step_counter-1],self.ddplan_instance.dm_boundaries[dm_step_counter]]
 					
-					
+					dm_time_array = np.zeros((list_ndms[dm_step_counter],nsamps))
+					for idm in range(list_ndms[dm_step_counter]):
+						dm_time_array[idm] = np.ctypeslib.as_array( ddtr_output[dm_step_counter][idm] , (int(nsamps),))
+
+					group.attrs["dm_step_"+str(dm_step_counter)] = self.ddplan_instance.old_ddplan_dm_step[dm_step_counter]
+					dataset_name = str(dm_step_counter)
+					group.create_dataset(dataset_name,data=dm_time_array)
+
+
 	def subband_data(self):
 		chantop = int((self.header.ftop - self.subbanded[0])/np.abs(self.header.foff))
 		chanbottom = int((self.header.ftop - self.subbanded[1])/np.abs(self.header.foff))
@@ -213,6 +297,8 @@ class Dedispersing_files(object):
 		self.create_ddplan()
 		if self.file_type == 'sf':
 			self.dedisperse_psr_fits(str(self.filename))
+		elif self.file_type == 'fil' and self.use_astro_accelerate:
+			self.aa_dedisperse_fil(str(self.filename))
 		else:
 			self.dedisperse_fil(str(self.filename))
 
@@ -221,6 +307,7 @@ def parse_args():
 		description="Create DM-time images for Mask RCNN inference and save them to hdf5 file.",
 		formatter_class=argparse.ArgumentDefaultsHelpFormatter,
 	)
+	parser.add_argument('-aa','--use-astro-accelerate', dest='use_astro_accelerate', help='Use AstroAccelerate for dedispersion', action='store_true')
 	parser.add_argument('--no-zdot', dest='nozdot', help='Disable Z-Dot filter', action='store_true')
 	parser.add_argument('--no-rfi-cleaning', dest='norficleaning', help='Disable IQRM RFI cleaning', action='store_true')
 	parser.add_argument('-o', '--outdir', help='Output directory for saving hdf5 file', default=os.getcwd())
@@ -234,7 +321,7 @@ if __name__ == '__main__':
 	args = parse_args()
 	config = Config()
 	start_time = time.time()
-	dedisperse_class = Dedispersing_files(config, args.datapath, args.outdir, args.subband, args.nchunk, args.norficleaning, args.nozdot)
+	dedisperse_class = Dedispersing_files(config, args.datapath, args.outdir, args.subband, args.nchunk, args.norficleaning, args.nozdot, args.use_astro_accelerate)
 	dedisperse_class.dedisperse()
 	end_time = time.time()
 	print('That took ', round(end_time-start_time,4), ' s.')
