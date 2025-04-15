@@ -265,7 +265,7 @@ class Dedispersing_files(object):
 
 				for dm_step_counter in range(pipeline.ddtr_range()):
 					list_ndms = pipeline.ddtr_ndms()
-					nsamps = int(ts_inc/(self.ddplan_instance.old_ddplan_downsampling_factor[dm_step_counter].astype(int)*self.initial_downsampling_factor))
+					nsamps = int(ts_inc)
 					if dm_step_counter < 1:
 						group.attrs["dm_range_"+str(dm_step_counter)] = [0,self.ddplan_instance.dm_boundaries[dm_step_counter]]
 					else:
@@ -275,6 +275,8 @@ class Dedispersing_files(object):
 					for idm in range(list_ndms[dm_step_counter]):
 						dm_time_array[idm] = np.ctypeslib.as_array( ddtr_output[dm_step_counter][idm] , (int(nsamps),))
 
+					# TODO: Downsampling is done here, ideally it should be done by astro-accelerate
+					dm_time_array = block_reduce(dm_time_array, block_size=(1,self.ddplan_instance.old_ddplan_downsampling_factor[dm_step_counter].astype(int)*self.initial_downsampling_factor),func=np.mean)
 					group.attrs["dm_step_"+str(dm_step_counter)] = self.ddplan_instance.old_ddplan_dm_step[dm_step_counter]
 					dataset_name = str(dm_step_counter)
 					group.create_dataset(dataset_name,data=dm_time_array)
