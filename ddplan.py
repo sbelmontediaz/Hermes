@@ -229,8 +229,9 @@ class ddplan(object):
 		DM_max_list_floats = []
 		happened = False
 		for width in self.width_array:
-			# Find the total smearing time that would cause the width of the burst be 2 times the original width
+			# Find the total smearing time that would cause the width of the burst be 1.5 times the original width
 			smearing_time = np.sqrt((1.5*width)**2-(width)**2) * 10**-6
+			print(width)
 			# Subtract the DM step and sampling time smearing since they are independent of DM
 			smearing_time -= (self.sampling_time_smearing(0,downsample_factor) + self.dm_step_smearing(0,self.first_dm_step*downsample_factor)) * 10**-6
 			if smearing_time <= 0:
@@ -238,6 +239,8 @@ class ddplan(object):
 			# Find the corresponding DM that would cause an intrachannel smearing of the given value
 			DM_max = self.inverse_intrachannel_smearing(smearing_time)
 			if DM_max >= self.config.dm_max:
+				print("DM_MAX REACHED")
+				"""
 				if len(DM_max_list_floats) < 1:
 					break
 				if happened == False:
@@ -246,8 +249,10 @@ class ddplan(object):
 						DM_max_list_floats.pop()
 						happened = True
 				continue
+				"""
 			# Increase the downsampling factor for each range
 			downsample_factor *= self.config.width_step
+			print(DM_max)
 			DM_max_list_floats.append(DM_max)
 			DM_max_list.append(int(DM_max))
 		DM_max_list.append(int(self.config.dm_max))
@@ -271,8 +276,8 @@ class ddplan(object):
 				self._old_ddplan_dm_min[i] -= int(self.config.overlap*self.first_dm_step*2**(i))
 				self._old_ddplan_dm_min_float[i] -= self.config.overlap*self.first_dm_step*2**i 
 
-		self._old_ddplan_dm_max[-1] = int(self.config.dm_max)
-		self._old_ddplan_dm_max_float[-1] = self.config.dm_max
+		#self._old_ddplan_dm_max[-1] = int(self.config.dm_max)
+		#self._old_ddplan_dm_max_float[-1] = self.config.dm_max
 	
 	def create_dm_steps_array(self):
 		self._old_ddplan_dm_step = np.ones((len(self.old_ddplan_dm_min)))*self.first_dm_step*self.config.width_step**(np.arange(0,len(self.old_ddplan_dm_min))) 
@@ -284,19 +289,20 @@ class ddplan(object):
 		self._old_number_of_dms = ((self.old_ddplan_dm_max-self.old_ddplan_dm_min)/self.old_ddplan_dm_step).astype(int) + 2
 
 	def print_ddplan(self):
+		
 		print("The original dedispersion plan generated looks like the following: ")
 		print("DM min\tDM max\tDM step\tNum of DMs Percentage of DMs")
 		for i in range(len(self.old_ddplan_dm_min)):
 			print(round(self.old_ddplan_dm_min_float[i],1),'\t',round(self.old_ddplan_dm_max_float[i],1),'\t',round(self.old_ddplan_dm_step[i],3),'\t',self.old_number_of_dms[i],'\t',round(self.old_number_of_dms[i]/self.old_number_of_dms.sum()*100,1),'%')
 		print("Total number of DMs searched: ", self.old_number_of_dms.sum())
 		
-		print("The modified dedispersion plan generated looks like the following: ")
-		print("DM min\tDM max\tDM step\tNum of DMs Percentage of DMs")
+		print("The dedispersion plan generated looks like the following: ")
+		print("DM min\t\tDM max\t\tDM step\t\tNum of DMs Percentage of DMs")
 		for i in range(len(self.old_ddplan_dm_min)):
 			if i < 1:
-				print(0,'\t',round(self.dm_boundaries[i],1),'\t',round(self.old_ddplan_dm_step[i],3),'\t',self.dm_trials[i],'\t',round(self.dm_trials[i]/self.dm_trials.sum()*100,1),'%')
+				print(0,'\t\t',round(self.dm_boundaries[i],1),'\t\t',round(self.old_ddplan_dm_step[i],3),'\t\t',self.dm_trials[i],'\t\t',round(self.dm_trials[i]/self.dm_trials.sum()*100,1),'%')
 			else:
-				print(round(self.dm_boundaries[i-1],1),'\t',round(self.dm_boundaries[i],1),'\t',round(self.old_ddplan_dm_step[i],3),'\t',self.dm_trials[i],'\t',round(self.dm_trials[i]/self.dm_trials.sum()*100,1),'%')
+				print(round(self.dm_boundaries[i-1],1),'\t\t',round(self.dm_boundaries[i],1),'\t\t',round(self.old_ddplan_dm_step[i],3),'\t\t',self.dm_trials[i],'\t\t',round(self.dm_trials[i]/self.dm_trials.sum()*100,1),'%')
 		print("Total number of DMs searched: ", self.dm_trials.sum())
 
 	def plot_ddplan(self):

@@ -159,41 +159,39 @@ class Dedispersing_files(object):
 		end_time = time.time()
 		print('That took ', round(end_time-start_time,4), ' s.')
 
-	def dedisperse_fil(self,filename):
-		self.calculate_indeces()
-		with h5py.File(filename.replace(str(self.root_directory),str(self.output_directory)).replace("fil","hdf5"),"w") as g:
-			for i in range(len(self.file_indeces)):
-				group_time_0 = time.time()
-				group = g.create_group(str(i))
-				group.attrs["files_dedispersed"] = filename.replace(str(self.root_directory),"")
-				group.attrs["total_length"] = self.number_of_subint
-				group.attrs["length_per_file"] = self.header.tobs
-				self.original_dynamic_spectrum = utils._load_data(filename, self.file_type, self.file_indeces[i], self.number_of_samples_array[i], self.header, self.no_rfi_cleaning ,self.no_zdot)
-				for dm_step_counter, dm_step in enumerate(self.ddplan_instance.old_ddplan_dm_step):
-					#Find how many dm bins you require for the given DM chunk in the ddplan
-					if dm_step_counter < 1:
-						print("Creating DM-time array for DMs ",0, self.ddplan_instance.dm_boundaries[dm_step_counter])
-						dm_bins = int(np.ceil(self.ddplan_instance.dm_boundaries[dm_step_counter]/dm_step)) + 1
-					else:
-						dm_bins = int(np.ceil(self.ddplan_instance.dm_boundaries[dm_step_counter]/dm_step)) - int(self.ddplan_instance.dm_boundaries[dm_step_counter-1]/dm_step) +1
-						print("Creating DM-time array for DMs ", self.ddplan_instance.dm_boundaries[dm_step_counter-1], self.ddplan_instance.dm_boundaries[dm_step_counter])
-					self._dm_time_array = np.zeros((dm_bins,1))
-					if self.subbanded:
-						self.subband_data()
-					print("Downsampling the filterbank file.")
-					self.dynamic_spectrum = block_reduce(self.original_dynamic_spectrum, block_size=(1,self.ddplan_instance.old_ddplan_downsampling_factor[dm_step_counter].astype(int)*self.initial_downsampling_factor),func=np.mean)
-					print("Dedispersing the file.")
-					if dm_step_counter < 1:
-						dm_time_array = utils.transform(self.dynamic_spectrum, self.header.ftop,self.header.fbottom,self.ddplan_instance.old_ddplan_downsampling_factor[dm_step_counter].astype(int)*self.initial_downsampling_factor*self.header.tsamp, 0, self.ddplan_instance.dm_boundaries[dm_step_counter], self.ddplan_instance.old_ddplan_dm_step[dm_step_counter]).data
-						group.attrs["dm_range_"+str(dm_step_counter)] = [0,self.ddplan_instance.dm_boundaries[dm_step_counter]]
-					else:
-						dm_time_array = utils.transform(self.dynamic_spectrum, self.header.ftop,self.header.fbottom,self.ddplan_instance.old_ddplan_downsampling_factor[dm_step_counter].astype(int)*self.initial_downsampling_factor*self.header.tsamp, self.ddplan_instance.dm_boundaries[dm_step_counter-1], self.ddplan_instance.dm_boundaries[dm_step_counter], self.ddplan_instance.old_ddplan_dm_step[dm_step_counter]).data
-						group.attrs["dm_range_"+str(dm_step_counter)] = [self.ddplan_instance.dm_boundaries[dm_step_counter-1],self.ddplan_instance.dm_boundaries[dm_step_counter]]
-					self._dm_time_array = np.hstack((self.dm_time_array,dm_time_array))
-					self._dm_time_array = self.dm_time_array[::,1::]
-					group.attrs["dm_step_"+str(dm_step_counter)] = self.ddplan_instance.old_ddplan_dm_step[dm_step_counter]
-					dataset_name = str(dm_step_counter)
-					group.create_dataset(dataset_name,data=self.dm_time_array)
+	def dedisperse_fil(self,index):
+		"""
+		group.attrs["files_dedispersed"] = filename.replace(str(self.root_directory),"")
+		group.attrs["total_length"] = self.number_of_subint
+		group.attrs["length_per_file"] = self.header.tobs
+		"""
+		self.original_dynamic_spectrum = utils._load_data(str(self.filename), self.file_type, self.file_indeces[index], self.number_of_samples_array[index], self.header, self.no_rfi_cleaning ,self.no_zdot)
+		self.return_dm_time = np.empty(len(self.ddplan_instance.old_ddplan_dm_step),dtype=object)
+		for dm_step_counter, dm_step in enumerate(self.ddplan_instance.old_ddplan_dm_step):
+			#Find how many dm bins you require for the given DM chunk in the ddplan
+			if dm_step_counter < 1:
+				print("Creating DM-time array for DMs ",0, self.ddplan_instance.dm_boundaries[dm_step_counter])
+				dm_bins = int(np.ceil(self.ddplan_instance.dm_boundaries[dm_step_counter]/dm_step)) + 1
+			else:
+				dm_bins = int(np.ceil(self.ddplan_instance.dm_boundaries[dm_step_counter]/dm_step)) - int(self.ddplan_instance.dm_boundaries[dm_step_counter-1]/dm_step) +1
+				print("Creating DM-time array for DMs ", self.ddplan_instance.dm_boundaries[dm_step_counter-1], self.ddplan_instance.dm_boundaries[dm_step_counter])
+			self._dm_time_array = np.zeros((dm_bins,1))
+			if self.subbanded:
+				self.subband_data()
+			print("Downsampling the filterbank file.")
+			self.dynamic_spectrum = block_reduce(self.original_dynamic_spectrum, block_size=(1,self.ddplan_instance.old_ddplan_downsampling_factor[dm_step_counter].astype(int)*self.initial_downsampling_factor),func=np.mean)
+			print("Dedispersing the file.")
+			if dm_step_counter < 1:
+				dm_time_array = utils.transform(self.dynamic_spectrum, self.header.ftop,self.header.fbottom,self.ddplan_instance.old_ddplan_downsampling_factor[dm_step_counter].astype(int)*self.initial_downsampling_factor*self.header.tsamp, 0, self.ddplan_instance.dm_boundaries[dm_step_counter], self.ddplan_instance.old_ddplan_dm_step[dm_step_counter]).data
+				#group.attrs["dm_range_"+str(dm_step_counter)] = [0,self.ddplan_instance.dm_boundaries[dm_step_counter]]
+			else:
+				dm_time_array = utils.transform(self.dynamic_spectrum, self.header.ftop,self.header.fbottom,self.ddplan_instance.old_ddplan_downsampling_factor[dm_step_counter].astype(int)*self.initial_downsampling_factor*self.header.tsamp, self.ddplan_instance.dm_boundaries[dm_step_counter-1], self.ddplan_instance.dm_boundaries[dm_step_counter], self.ddplan_instance.old_ddplan_dm_step[dm_step_counter]).data
+				#group.attrs["dm_range_"+str(dm_step_counter)] = [self.ddplan_instance.dm_boundaries[dm_step_counter-1],self.ddplan_instance.dm_boundaries[dm_step_counter]]
+			self._dm_time_array = np.hstack((self.dm_time_array,dm_time_array))
+			self._dm_time_array = self.dm_time_array[::,1::]
+			#group.attrs["dm_step_"+str(dm_step_counter)] = self.ddplan_instance.old_ddplan_dm_step[dm_step_counter]
+			self.return_dm_time[dm_step_counter] = self.dm_time_array
+			#group.create_dataset(dataset_name,data=self.dm_time_array)
 					
 					
 	def subband_data(self):
@@ -209,12 +207,15 @@ class Dedispersing_files(object):
 		for file in self.list_of_files:
 			self.dedisperse_psr_fits(file)
 			
-	def dedisperse(self):
-		self.create_ddplan()
+	def dedisperse(self,index):
+		#self.create_ddplan()
 		if self.file_type == 'sf':
 			self.dedisperse_psr_fits(str(self.filename))
+			return np.zeros((1,1))
 		else:
-			self.dedisperse_fil(str(self.filename))
+			self.calculate_indeces()
+			self.dedisperse_fil(index)
+			return self.return_dm_time
 
 def parse_args():
 	parser = argparse.ArgumentParser(
