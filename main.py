@@ -354,12 +354,12 @@ class Hermes(object):
 	#Function to run inference on the Mask RCNN model and collect the results.
 	
 	def inference(self, dataset):
-	    """
+		"""
 		Runs inference on the Mask R-CNN model for all DM-time image slices.
-
+		
 		Parameters:
 			dataset (DataLoader): The dataloader containing the preprocessed DM-time image slices.
-
+		
 		Collects:
 			Predictions (with scores above threshold) and relevant metadata for later plotting and analysis.
 		"""
