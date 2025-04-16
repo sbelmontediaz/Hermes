@@ -223,17 +223,15 @@ class Dedispersing_files(object):
 					tmp=None
 					if i<1:
 						lowDM = 0
-						highDM = self.ddplan_instance.dm_boundaries[i]
-						tmp = aa_py_dm(lowDM,highDM,self.ddplan_instance.old_ddplan_dm_step[i],1,self.ddplan_instance.old_ddplan_downsampling_factor[i].astype(int)*self.initial_downsampling_factor)
 					else:
 						lowDM = self.ddplan_instance.dm_boundaries[i-1]
-						highDM = self.ddplan_instance.dm_boundaries[i]
-						tmp = aa_py_dm(lowDM,highDM,self.ddplan_instance.old_ddplan_dm_step[i],1,self.ddplan_instance.old_ddplan_downsampling_factor[i].astype(int)*self.initial_downsampling_factor)
+					highDM = self.ddplan_instance.dm_boundaries[i]
+					tmp = aa_py_dm(lowDM,highDM,self.ddplan_instance.old_ddplan_dm_step[i],1,self.ddplan_instance.old_ddplan_downsampling_factor[i].astype(int)*self.initial_downsampling_factor)
 					temp_list.append(tmp)
 				dm_list = np.array(temp_list,dtype=aa_py_dm)
 				# Create ddtr_plan
 				self.ddtr_plan = aa_py_ddtr_plan(dm_list)
-				enable_msd_baseline_noise=True
+				enable_msd_baseline_noise=False
 				self.ddtr_plan.set_enable_msd_baseline_noise(enable_msd_baseline_noise)
 				self.ddtr_plan.print_info()
 				# Set up pipeline components
@@ -241,10 +239,6 @@ class Dedispersing_files(object):
 				pipeline_components.dedispersion = True
 				# Set up pipeline component options	
 				pipeline_options = aa_py_pipeline_component_options()
-				pipeline_options.set_bandpass_average = False
-				pipeline_options.zero_dm = False
-				pipeline_options.zero_dm_with_outliers = False
-				pipeline_options.old_rfi = False
 				pipeline_options.output_dmt = True
 				#Need to be enabled otherwise there will be no data copy from GPU memory to host memory
 				pipeline_options.copy_ddtr_data_to_host = True
