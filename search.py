@@ -36,10 +36,9 @@ np.random.seed(10)
 #Class to perform data processing of the DM-time transform. It performs the downsampling, slicing and normalisation.
 class Data_processing(object):
 
-	def __init__(self, config, data_path):
+	def __init__(self, config, dm_time_array):
 		self.config = config
-		self.data_path = data_path
-		self.dm_time_array = np.zeros((1,1))
+		self.dm_time_array = dm_time_array
 		self.slices_dm_time_array = np.zeros((1,1,1,1))
 		self.slices_num_of_rows = 0
 		self.slices_num_of_cols = 0
@@ -60,16 +59,6 @@ class Data_processing(object):
 		strides = (array.strides[0] * step_size, array.strides[1] * step_size, array.strides[0], array.strides[1])
 		slices = np.lib.stride_tricks.as_strided(array, shape = shape, strides = strides)
 		return slices
-
-	#Function to access the DM-time transform saved in the .hdf5 file.
-	def obtain_dm_time_array(self, group, index):
-		with h5py.File(self.data_path,"r") as f:
-			print('Loading the DM-time array')
-			start_time = time.time()
-			self.dm_time_array = f[str(group)][str(index)][...]
-			end_time = time.time()
-			print("That took ", round(end_time-start_time,4), " s.")
-			self._loading_time += end_time-start_time
 
 	#Calculate the most optimal time window size based on the chosen S/N drop factor. The optimal time window is calculated to be an integer number of the window size.
 	def calculate_time_window(self,width,downsampling_fact):
@@ -107,33 +96,38 @@ class Data_processing(object):
 
 
 	#Downsample a 2d array by using strides and summing for more efficiency.
-	def downsample_dm_time_array(self, dm_factor, time_factor):
-		new_shape = (self.dm_time_array.shape[0]//dm_factor, dm_factor, self.dm_time_array.shape[1]//time_factor, time_factor)
-		strides = (self.dm_time_array.strides[0] * dm_factor, self.dm_time_array.strides[0], self.dm_time_array.strides[1] * time_factor, self.dm_time_array.strides[1])
-		self.dm_time_array = np.lib.stride_tricks.as_strided(self.dm_time_array, shape = new_shape, strides = strides)
-		self.dm_time_array = self.dm_time_array.sum(axis=(1,3))/(time_factor*dm_factor)	
+	def downsample_dm_time_array(self, index, dm_factor, time_factor):
+		new_shape = (self.dm_time_array[index].shape[0]//dm_factor, dm_factor, self.dm_time_array[index].shape[1]//time_factor, time_factor)
+		strides = (self.dm_time_array[index].strides[0] * dm_factor, self.dm_time_array[index].strides[0], self.dm_time_array[index].strides[1] * time_factor, self.dm_time_array[index].strides[1])
+		self.dm_time_array[index] = np.lib.stride_tricks.as_strided(self.dm_time_array[index], shape = new_shape, strides = strides)
+		self.dm_time_array[index] = self.dm_time_array[index].sum(axis=(1,3))/(time_factor*dm_factor)	
 		
 	#Function to slice the array and normalise the slices by scaling the set to have zero mean and std of unity.
-	def slice_and_normalize(self,window_size):
-		print("Slicing the DM-time array.")
-		start_time = time.time()
-		self.slices_dm_time_array = self._slice_2d_array_into_slices(self.dm_time_array.copy(),window_size,self.config.overlap)
+	def slice_and_normalize(self,index):
+		print("Slicing DM-time array number ", index)
+		#If index is larger than max DM range, do not merge, just downsample
+		if index >= self.dm_time_array.shape[0]:
+			index = self.dm_time_array.shape[0]-1
+			self.downsample_dm_time_array(index,2,2)
+		elif index != 0:
+			self.downsample_dm_time_array(index-1,2,2)
+			if self.dm_time_array[index-1].shape[1] != self.dm_time_array[index].shape[1]:
+				size1 = self.dm_time_array[index-1].shape[1]
+				size2 = self.dm_time_array[index].shape[1]
+				difference_in_shape = np.abs(size1-size2)
+				if size1>size2:
+					self.dm_time_array[index-1] = self.dm_time_array[index-1][::,:-difference_in_shape]
+				else:
+					self.dm_time_array[index] = self.dm_time_array[index][::,:-difference_in_shape]
+
+			self.dm_time_array[index] = np.vstack((self.dm_time_array[index-1],self.dm_time_array[index]))
+		self.slices_dm_time_array = self._slice_2d_array_into_slices(self.dm_time_array[index].copy(),self.config.image_size,self.config.overlap)
 		self.slices_num_of_rows, self.slices_num_of_cols = self.slices_dm_time_array.shape[0:2]
-		end_time = time.time()
-		print("That took ", round(end_time-start_time,4), " s.")
-		self._slicing_time += end_time - start_time
-		print("Normalising the DM-time array.")
-		start_time = time.time()
 		self.mean_set = np.mean(self.slices_dm_time_array)
 		self.std_set = np.std(self.slices_dm_time_array)
-		#self.mean_set, median, self.std_set = sigma_clipped_stats(self.slices_dm_time_array,sigma=3.0) #self.std_set = np.std(self.slices_dm_time_array)
-		#print(self.mean_set,self.std_set)
 		self.slices_dm_time_array -= self.mean_set
 		self.slices_dm_time_array /= self.std_set
-		self.slices_dm_time_array = self.slices_dm_time_array.reshape(self.slices_num_of_rows*self.slices_num_of_cols,window_size,window_size)
-		end_time = time.time()
-		print("That took ", round(end_time-start_time,4), " s.")
-		self._normalising_time += end_time - start_time
+		self.slices_dm_time_array = self.slices_dm_time_array.reshape(self.slices_num_of_rows*self.slices_num_of_cols,self.config.image_size,self.config.image_size)
 
 		
 #Class to create a dataset to later create a dataloader.
@@ -171,21 +165,22 @@ class ToTensor(object):
 
 #Main class to perform the search.
 class search_for_single_pulses(object):
-	def __init__(self, config, filename, data_path, output_directory, downsampling_factor,transforms):
+	def __init__(self, config, filename, output_directory, downsampling_factor,transforms):
 		self.config = config
 		#self.filterbank_directory = filterbank_directory
 		self.filename = Path(filename)#glob.glob(self.filterbank_directory)#+'*.fil')
 		self.file_type = str(self.filename).split(".")[-1]
-		self.data_path = str(Path(data_path))
+		#self.data_path = str(Path(data_path))
+		self.dm_time_array = np.empty((1,1,1))
 		self.output_directory = str(Path(output_directory))
 		self.original_downsample_factor = int(downsampling_factor)
-		self.data_processing = Data_processing(config,self.data_path)
+		self.data_processing = Data_processing(config,self.dm_time_array)
 		self.transforms = transforms
-		self.number_of_groups, self.number_of_dm_time_arrays = self._find_number_groups_and_dm_time_arrays()
+		#self.number_of_groups, self.number_of_dm_time_arrays = self._find_number_groups_and_dm_time_arrays()
 		self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 		self.model = self._initialize_model()
 		self._obtain_telescope_configuration()
-		self._create_directories()
+		#self._create_directories()
 		self.predictions = []
 		self.batch_index = 0
 		self.group_index = 0
@@ -212,17 +207,26 @@ class search_for_single_pulses(object):
 		self.max_reserved_memory = 0	
 		self.inference_time = 0	
 	
+	def _load_dm_time_array(self,dm_time_array,time_index):
+		self.dm_time_array = dm_time_array
+		self.data_processing = Data_processing(self.config,self.dm_time_array)
+		self.group_index = time_index
+		
 	#Get an attribute from the hdf5 file containing the data.
+	"""
 	def _get_attribute(self,attribute_name):
 		with h5py.File(self.data_path,"r") as f:
 			return f[str(self.group_index)].attrs[attribute_name]
+	"""
 
 	#Find the number of filterbank file groups and DM ranges in the hdf5 file.
+	"""
 	def _find_number_groups_and_dm_time_arrays(self):
 		with h5py.File(self.data_path,"r") as f:
 			num_of_groups = len(f.keys())
 			num_of_dm_time_arrays = len(f["0"].keys())
 		return num_of_groups, num_of_dm_time_arrays
+	"""
 		
 	def _obtain_telescope_configuration(self):
 		#Get the specific telescope configuration from the filterbank file.
@@ -326,26 +330,36 @@ class search_for_single_pulses(object):
 				
 					
 	#Main function to peform the search.
-	def Mask_RCNN_inference(self):
-		for group_index in range(self.number_of_groups):
-			#Reset all the variables to keep track of the groups, downsampling factors, etc.
-			print("Searching for bursts in group number ", group_index)
-			self.counter = 0
-			self.group_index = group_index
-			self.downsample_factor = self.original_downsample_factor
-			self.redownsample_factor = 1
-			self.prediction_id = 0
-			self.processing_time = 0
-			self.plot_time = 0
-			#self.inference_time =0
-			self.prediction_information_to_csv = np.zeros((1,13))
-			self.dm_time_index = 0
+	def Mask_RCNN_inference(self, index):
+		#Reset all the variables to keep track of the groups, downsampling factors, etc.
+		print("Searching for bursts in index ", index)
+		self.dm_time_index = index
+		self.counter = 0
+		self.downsample_factor = self.original_downsample_factor
+		self.redownsample_factor = 1
+		self.prediction_id = 0
+		self.prediction_information_to_csv = np.zeros((1,13))
+		self.width = self.config.width_array[index]
+		print("Searching for bursts of width ", self.width, " \u00B5s.")
+		#Obtain a DM-time array, slice it and load it to the dataloader.
+		self.data_processing.slice_and_normalize(index)
+		self.number_of_images += self.data_processing.slices_dm_time_array.shape[0]
+		self.num_imgs.append(self.data_processing.slices_dm_time_array.shape[0])
+		self.num_rows.append(self.data_processing.slices_num_of_rows)
+		self.num_cols.append(self.data_processing.slices_num_of_cols)
+		dataset = DataLoader(MyDataset(self.data_processing.slices_dm_time_array, self.transforms),batch_size=self.config.batch_size,shuffle=False,num_workers=8, pin_memory=True, prefetch_factor=256)
+		#Run inference and collect results.		
+		self.inference(dataset)
+		"""
+		for dm_time_index in range(1,self.number_of_dm_time_arrays):
+			start_processing = time.time()
+			self.dm_time_index = dm_time_index
 			print("DM-TIME INDEX ",self.dm_time_index)
 			self.width = self.config.width_array[self.dm_time_index]
 			print("Searching for bursts of width ", self.width, " \u00B5s.")
-			#Obtain a DM-time array, slice it and load it to the dataloader.
-			start_processing = time.time()
-			self.data_processing.obtain_dm_time_array(group_index,self.dm_time_index)
+			#Downsample the current DM-array and append the next DM-time array.
+			self.data_processing.downsample_and_merge(group_index,dm_time_index)
+			self.downsample_factor *= 2
 			self.array_rows.append(self.data_processing.dm_time_array.shape[1])
 			self.array_cols.append(self.data_processing.dm_time_array.shape[0])
 			self.data_processing.slice_and_normalize(self.config.image_size)
@@ -356,52 +370,32 @@ class search_for_single_pulses(object):
 			dataset = DataLoader(MyDataset(self.data_processing.slices_dm_time_array, self.transforms),batch_size=self.config.batch_size,shuffle=False,num_workers=8, pin_memory=True, prefetch_factor=256)
 			end_processing = time.time()
 			self.processing_time += end_processing - start_processing
-			#Run inference and collect results.		
+			#print(self.processing_time)
 			self.inference(dataset)
-			for dm_time_index in range(1,self.number_of_dm_time_arrays):
-				start_processing = time.time()
-				self.dm_time_index = dm_time_index
-				print("DM-TIME INDEX ",self.dm_time_index)
-				self.width = self.config.width_array[self.dm_time_index]
-				print("Searching for bursts of width ", self.width, " \u00B5s.")
-				#Downsample the current DM-array and append the next DM-time array.
-				self.data_processing.downsample_and_merge(group_index,dm_time_index)
-				self.downsample_factor *= 2
-				self.array_rows.append(self.data_processing.dm_time_array.shape[1])
-				self.array_cols.append(self.data_processing.dm_time_array.shape[0])
-				self.data_processing.slice_and_normalize(self.config.image_size)
-				self.number_of_images += self.data_processing.slices_dm_time_array.shape[0]
-				self.num_imgs.append(self.data_processing.slices_dm_time_array.shape[0])
-				self.num_rows.append(self.data_processing.slices_num_of_rows)
-				self.num_cols.append(self.data_processing.slices_num_of_cols)
-				dataset = DataLoader(MyDataset(self.data_processing.slices_dm_time_array, self.transforms),batch_size=self.config.batch_size,shuffle=False,num_workers=8, pin_memory=True, prefetch_factor=256)
-				end_processing = time.time()
-				self.processing_time += end_processing - start_processing
-				#print(self.processing_time)
-				self.inference(dataset)
-			#After all the arrays in dedispersed at different DM ranges have been searched for in their corresponding widths, finish searching all the widths specified in the config file.
-			for search_width in self.config.width_array[self.dm_time_index+1:]:
-				start_processing = time.time()
-				self.width = search_width
-				print("Searching for bursts of width ", self.width, " \u00B5s.")
-				self.data_processing.downsample_dm_time_array(2,2)
-				#self.downsample_factor *= 2
-				self.redownsample_factor *= 2
-				self.array_rows.append(self.data_processing.dm_time_array.shape[1])
-				self.array_cols.append(self.data_processing.dm_time_array.shape[0])
-				self.data_processing.slice_and_normalize(self.config.image_size)
-				self.number_of_images += self.data_processing.slices_dm_time_array.shape[0]
-				self.num_imgs.append(self.data_processing.slices_dm_time_array.shape[0])
-				self.num_rows.append(self.data_processing.slices_num_of_rows)
-				self.num_cols.append(self.data_processing.slices_num_of_cols)
-				dataset = DataLoader(MyDataset(self.data_processing.slices_dm_time_array, self.transforms),batch_size=self.config.batch_size,shuffle=False,num_workers=8, pin_memory=True, prefetch_factor=256)
-				end_processing = time.time()
-				self.processing_time += end_processing - start_processing
-				#print(self.processing_time)
-				self.inference(dataset)
-			print("Done. Number of images processed:", self.number_of_images)
-			#Create a csv file saving the information of the bursts detected.
-			self.save_prediction_information()
+		#After all the arrays in dedispersed at different DM ranges have been searched for in their corresponding widths, finish searching all the widths specified in the config file.
+		for search_width in self.config.width_array[self.dm_time_index+1:]:
+			start_processing = time.time()
+			self.width = search_width
+			print("Searching for bursts of width ", self.width, " \u00B5s.")
+			self.data_processing.downsample_dm_time_array(2,2)
+			#self.downsample_factor *= 2
+			self.redownsample_factor *= 2
+			self.array_rows.append(self.data_processing.dm_time_array.shape[1])
+			self.array_cols.append(self.data_processing.dm_time_array.shape[0])
+			self.data_processing.slice_and_normalize(self.config.image_size)
+			self.number_of_images += self.data_processing.slices_dm_time_array.shape[0]
+			self.num_imgs.append(self.data_processing.slices_dm_time_array.shape[0])
+			self.num_rows.append(self.data_processing.slices_num_of_rows)
+			self.num_cols.append(self.data_processing.slices_num_of_cols)
+			dataset = DataLoader(MyDataset(self.data_processing.slices_dm_time_array, self.transforms),batch_size=self.config.batch_size,shuffle=False,num_workers=8, pin_memory=True, prefetch_factor=256)
+			end_processing = time.time()
+			self.processing_time += end_processing - start_processing
+			#print(self.processing_time)
+			self.inference(dataset)
+		"""
+		print("Done. Number of images processed:", self.number_of_images)
+		#Create a csv file saving the information of the bursts detected.
+		#self.save_prediction_information()
 	
 	#Save the information of the candidates in a csv file to inspect later.
 	def save_prediction_information(self):
@@ -456,17 +450,21 @@ class search_for_single_pulses(object):
 				print("redownsample_factor ", self.redownsample_factor)
 				print("dm_range ", self._get_attribute('dm_range_'+str(self.dm_time_index))[0])
 				"""
-				DM = ((DM + (self.config.image_size-self.config.overlap)*rows_id_image)*self._get_attribute("dm_step_"+str(self.dm_time_index))*self.redownsample_factor) #+ self._get_attribute('dm_range_'+str(self.dm_time_index))[0]
-				#print(DM)
-				#print("BURST FOUND AT ROW ",str(rows_id_image)," AND COLUMN ",str(cols_id_image)," AND SLICE ",candidate+self.batch_index)
-				time=((self.config.image_size-self.config.overlap)*cols_id_image+time)*self.config.tsamp*self.redownsample_factor*self.downsample_factor
+				
+				###DM = ((DM + (self.config.image_size-self.config.overlap)*rows_id_image)*self._get_attribute("dm_step_"+str(self.dm_time_index))*self.redownsample_factor) #+ self._get_attribute('dm_range_'+str(self.dm_time_index))[0]
+				
+				
+				###time=((self.config.image_size-self.config.overlap)*cols_id_image+time)*self.config.tsamp*self.redownsample_factor*self.downsample_factor
+				
 				#Collect other information for the summary of the search file.
-				filterbank_files_information = self._get_attribute('files_dedispersed')[np.digitize(time,np.cumsum(self._get_attribute('length_per_file')))]
-				#print('TIME:  ',time)
-				#print('TIME ARRAY:   ',self._get_attribute('length_per_file'))
-				#print('CUMSUM TIME ARRAY:   ',np.cumsum(self._get_attribute('length_per_file')))
+				
+				###filterbank_files_information = self._get_attribute('files_dedispersed')[np.digitize(time,np.cumsum(self._get_attribute('length_per_file')))]
+				filterbank_files_information = "try"
+				
+
 				#self._positive_or_largest(time,time - np.cumsum(self._get_attribute('length_per_file'))[np.digitize(time,np.cumsum(self._get_attribute('length_per_file')))-1])
-				self.prediction_information = np.array([self.prediction_id, self.dm_time_index, self.width, time, DM, self.predictions[candidate]['scores'][batch].item(),number_of_good_candidates, candidate, self.data_processing.slices_num_of_rows, self.data_processing.slices_num_of_cols, filterbank_files_information, time + self._get_attribute('total_length')*self.group_index,self.output_directory+str(self.group_index)+"/"+str(self.counter)+"_"+str(self.width)+"_"+str(round(DM,2))+"_"+str(round(time,3))+"_"+str(candidate+self.batch_index)+'.png'])
+				self.prediction_information = np.array([self.prediction_id, self.dm_time_index, self.width, time, DM, self.predictions[candidate]['scores'][batch].item(),number_of_good_candidates, candidate, self.data_processing.slices_num_of_rows, self.data_processing.slices_num_of_cols, filterbank_files_information, time, "try.png"]) #+ self._get_attribute('total_length')*self.group_index,self.output_directory+str(self.group_index)+"/"+str(self.counter)+"_"+str(self.width)+"_"+str(round(DM,2))+"_"+str(round(time,3))+"_"+str(candidate+self.batch_index)+'.png'])
+				
 				self.prediction_information_to_csv = np.vstack((self.prediction_information_to_csv,self.prediction_information))
 				self.prediction_id += 1
 				#Plot the boundary box of the candidate as horizontal lines.
@@ -476,8 +474,8 @@ class search_for_single_pulses(object):
 				plt.vlines(boxes[batch][2],boxes[batch][1],boxes[batch][3],colors = mcolors.TABLEAU_COLORS[color_list[batch]],linestyles='dashed')
 			#Plot the segmentation mask and add axes and legend.
 			#THIS LINE PLOTS THE MASK plt.imshow(binary_mask,alpha=0.4,origin="lower",aspect='auto')
-			lower_DM = ((self.config.image_size-self.config.overlap)*rows_id_image)*self._get_attribute("dm_step_"+str(self.dm_time_index))*self.redownsample_factor
-			upper_DM = ((self.config.image_size-self.config.overlap)*(rows_id_image+1))*self._get_attribute("dm_step_"+str(self.dm_time_index))*self.redownsample_factor
+			lower_DM = ((self.config.image_size-self.config.overlap)*rows_id_image)#*self._get_attribute("dm_step_"+str(self.dm_time_index))*self.redownsample_factor
+			upper_DM = ((self.config.image_size-self.config.overlap)*(rows_id_image+1))#*self._get_attribute("dm_step_"+str(self.dm_time_index))*self.redownsample_factor
 			lower_time = -(self.redownsample_factor*self.config.tsamp*self.downsample_factor*self.config.image_size)/2
 			upper_time = -lower_time
 			plt.xticks([0,self.config.image_size//2,self.config.image_size],[round(lower_time,2),0,round(upper_time,2)],fontsize=15)
