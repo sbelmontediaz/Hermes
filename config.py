@@ -2,6 +2,7 @@ import numpy as np
 
 class Config(object):
 
+<<<<<<< HEAD
 	bandwidth = 320 #336#544#544#856#
 
 	ftop = 1670 #1732#1088#1711.89550781#1712#1088#1088#1712#
@@ -9,16 +10,33 @@ class Config(object):
 	nchans = 4096 #672
 
 	tsamp = 64e-6  #256*10**-6#0.0004818823529412#6.22056074766355e-05#0.00030624299#0.0004818823529412#0.0004818823529412#0.00030624299##
+=======
+	bandwidth = 0
+
+	ftop = 0
+
+	nchans = 0
+
+	tsamp = 0
+>>>>>>> f6fe0a4eeb1058fc31a69c07cf01686598baef81
 
 	min_width = 512 #16384#1024#256
 
+<<<<<<< HEAD
 	max_width = 8192 #microseconds
+=======
+	max_width = 16384#4096#8192#
+>>>>>>> f6fe0a4eeb1058fc31a69c07cf01686598baef81
 
 	width_step = 2 #2
 
 	dm_min = 0
 
+<<<<<<< HEAD
 	dm_max = 2000
+=======
+	dm_max = 8000
+>>>>>>> f6fe0a4eeb1058fc31a69c07cf01686598baef81
 
 	KDM = 1.0 / 2.41e-4
 

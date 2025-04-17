@@ -289,14 +289,16 @@ class Dedispersing_files(object):
 		for file in self.list_of_files:
 			self.dedisperse_psr_fits(file)
 			
-	def dedisperse(self):
-		self.create_ddplan()
+	def dedisperse(self,index):
+		#self.create_ddplan()
 		if self.file_type == 'sf':
 			self.dedisperse_psr_fits(str(self.filename))
 		elif self.file_type == 'fil' and self.use_astro_accelerate:
 			self.aa_dedisperse_fil(str(self.filename))
 		else:
-			self.dedisperse_fil(str(self.filename))
+			self.calculate_indeces()
+			self.dedisperse_fil(index)
+			return self.return_dm_time
 
 def parse_args():
 	parser = argparse.ArgumentParser(
