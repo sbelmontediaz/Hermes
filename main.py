@@ -172,7 +172,7 @@ class ToTensor(object):
 		return image
 
 class Hermes(object):
-	def __init__(self,config, filename, output_directory, subbanded, transforms, nsubint=100, no_rfi_cleaning=False, no_zdot=False):
+	def __init__(self,config, filename, output_directory, subbanded, transforms, nsubint=100, no_rfi_cleaning=False, no_zdot=False, use_astro_accelerate=False):
 		self.config 						=		config
 		self.filename 						=		Path(filename)				#Name of file to dedisperse
 		self.output_directory				=		Path(output_directory)		#Base directory where data should be saved in (output directory)
@@ -186,13 +186,14 @@ class Hermes(object):
 		self.no_zdot						=		no_zdot
 		self.no_rfi_cleaning 				= 		no_rfi_cleaning
 		self.ddplan_instance 				= 		ddplan(config,'empty',self.subbanded, str(self.filename))
+		self.use_astro_accelerate			= 		use_astro_accelerate
 		
 		#From search class
 		self._dm_time_array = np.empty((1,1,1))
 		self.data_processing = Data_processing(self.config,self.dm_time_array)
 		self.transforms = transforms
-		self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-		self.model = self._initialize_model()
+		#self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+		#self.model = self._initialize_model()
 		#self._create_directories()
 		self.predictions = []
 		self.batch_index = 0
@@ -365,17 +366,25 @@ class Hermes(object):
 		(ts_inc, ddtr_output) = pipeline.get_buffer()
 
 		print("Dedispersion finished. Now downsampling the data.")
-		for dm_step_counter in range(pipeline.ddtr_range()):
+		self.return_dm_time = np.empty(len(self.ddplan_instance.old_ddplan_dm_step),dtype=object)
+		#for dm_step_counter in range(pipeline.ddtr_range()):
+		for dm_step_counter, dm_step in enumerate(self.ddplan_instance.old_ddplan_dm_step):
 			list_ndms = pipeline.ddtr_ndms()
 			nsamps = int(ts_inc)
 					
 			dm_time_array = np.zeros((list_ndms[dm_step_counter],nsamps))
+			self._dm_time_array = np.zeros((list_ndms[dm_step_counter],1))
 			for idm in range(list_ndms[dm_step_counter]):
 				dm_time_array[idm] = np.ctypeslib.as_array( ddtr_output[dm_step_counter][idm] , (int(nsamps),))
 
 			# TODO: Downsampling is done here, ideally it should be done by astro-accelerate
 			dm_time_array = block_reduce(dm_time_array, block_size=(1,self.ddplan_instance.old_ddplan_downsampling_factor[dm_step_counter].astype(int)*self.initial_downsampling_factor),func=np.mean)
-		self.return_dm_time[dm_step_counter] = self.dm_time_array
+			self._dm_time_array = np.hstack((self._dm_time_array, dm_time_array))
+			self._dm_time_array = self.dm_time_array[::,1::]
+			self.return_dm_time[dm_step_counter] = self.dm_time_array
+
+		pipeline.cleanUp()
+		del self.ddtr_plan
 					
 	def subband_data(self):
 		chantop = int((self.header.ftop - self.subbanded[0])/np.abs(self.header.foff))
@@ -604,7 +613,15 @@ class Hermes(object):
 			self.counter = 0
 			self.prediction_information_to_csv = np.zeros((1,13))
 			self.time_index = time_index
-			self.dedisperse(self.time_index)
+			if self.use_astro_accelerate:
+				if len(self.file_indeces) > 1:
+					print("ERROR: Cannot use Astro-Accelerate with multiple chunks. Exiting...")
+					sys.exit()
+				self.aa_dedisperse_fil(str(self.filename))
+			else:
+				self.dedisperse(time_index)
+			self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+			self.model = self._initialize_model()
 			self.data_processing = Data_processing(self.config,self.return_dm_time)
 			for dm_index in range(len(self.return_dm_time)):
 				self.dm_index = dm_index
@@ -623,6 +640,7 @@ def parse_args():
 	parser.add_argument('-i','--datapath', help = 'Filename of the filterbank file to dedisperse', default=os.getcwd())
 	parser.add_argument('--nchunk', type=int, help='Number of chunks the search will be split into (Number of sub-integrations for PSRF FITS file or seconds of data for filterbank file)',default=100)
 	parser.add_argument('--subband',help='Top frequency and bottom frequency channel to subband the data to. This should be a comma-separated list of the values in MHz.', default=False)
+	parser.add_argument('-aa','--use-astro-accelerate', dest='use_astro_accelerate', help='Use AstroAccelerate for dedispersion', action='store_true')
 	
 	return parser.parse_args()
 	
@@ -630,7 +648,7 @@ if __name__ == '__main__':
 	args = parse_args()
 	config = Config()
 	transform = transforms.Compose([Normalize_DM_time_snap(),ToTensor()])
-	hermes = Hermes(config, args.datapath, args.outdir, args.subband, transform, args.nchunk, args.norficleaning, args.nozdot)
+	hermes = Hermes(config, args.datapath, args.outdir, args.subband, transform, args.nchunk, args.norficleaning, args.nozdot, args.use_astro_accelerate)
 	hermes.search()
 	
 	

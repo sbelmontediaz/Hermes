@@ -143,6 +143,13 @@ def read_plan_2d(
 # Standard value of the dispersion constant
 KDM = 1.0 / 2.41e-4
 
+# Function to downsample the data
+def downsample_dmt_array(dmt_array,  dm_factor, time_factor):
+		new_shape = (dmt_array.shape[0]//dm_factor, dm_factor, dmt_array.shape[1]//time_factor, time_factor)
+		strides = (dmt_array.strides[0] * dm_factor, dmt_array.strides[0], dmt_array.strides[1] * time_factor, dmt_array.strides[1])
+		dmt_array = np.lib.stride_tricks.as_strided(dmt_array, shape = new_shape, strides = strides)
+		dmt_array = dmt_array.sum(axis=(1,3))/(time_factor*dm_factor)
+
 #from pyfdmt: fast dm transform code from Vincent Morello. Modified to accomodate different dm steps rather than the native dm step.
 class InputBlock(object):
 	""" Wraps a frequency-time 2D array """
