@@ -237,6 +237,15 @@ class ddplan(object):
 				continue 
 			# Find the corresponding DM that would cause an intrachannel smearing of the given value
 			DM_max = self.inverse_intrachannel_smearing(smearing_time)
+			if DM_max >= self.config.dm_max:
+				if len(DM_max_list_floats) < 1:
+					break
+				if happened == False:
+					if (self.config.dm_max - DM_max_list_floats[-1])//(self.first_dm_step*downsample_factor) < self.config.image_size:
+						DM_max_list.pop()
+						DM_max_list_floats.pop()
+						happened = True
+				continue
 			# Increase the downsampling factor for each range
 			downsample_factor *= self.config.width_step
 			DM_max_list_floats.append(DM_max)
