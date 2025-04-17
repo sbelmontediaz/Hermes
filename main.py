@@ -3,6 +3,9 @@ import argparse
 import sys, os
 from config import Config
 
+import matplotlib
+matplotlib.use('Agg')
+
 import matplotlib.pyplot as plt
 import csv
 import glob
@@ -35,10 +38,16 @@ from torchvision.models.detection import MaskRCNN
 from torchvision.models.detection.backbone_utils import resnet_fpn_backbone
 from collections import deque
 
+from queue import Queue, Empty, Full
+from concurrent.futures import ThreadPoolExecutor
+import threading
+
 #List of colours to produce the plots.
 color_list = np.array(['tab:orange', 'tab:green', 'tab:red', 'tab:purple', 'tab:brown', 'tab:pink', 'tab:gray', 'tab:olive', 'tab:cyan','tab:blue'])
 #Headers of the information saved in the csv file.
 column_names = ['ID','DM_time_range','width_(\u00B5s)', 'time_(s)', 'DM', 'Prediction_score' ,'Burst in image', 'slice_num','rows_in_slice','cols_in_slice','filterbank_file','time_inside_filterbank','ml_prediction_image_name']
+
+
 
 #Class to perform data processing of the DM-time transform. It performs the downsampling, slicing and normalisation.
 class Data_processing(object):
@@ -213,6 +222,13 @@ class Hermes(object):
 		self.counter = 0	
 		self.inference_time = 0	
 		
+		#Multithreading
+		self.slice_queue = Queue(maxsize=20)
+		self.results_queue = Queue(maxsize=20)
+		self.executor = ThreadPoolExecutor(max_workers=20)
+		self.plotting_thread = threading.Thread(target=self.plot_results_pipeline, daemon=True)
+		self.plotting_thread.start()
+		
 			
 	@property
 	def dm_time_array(self):
@@ -290,18 +306,18 @@ class Hermes(object):
 			else:
 				dm_bins = int(np.ceil(self.ddplan_instance.dm_boundaries[dm_step_counter]/dm_step)) - int(self.ddplan_instance.dm_boundaries[dm_step_counter-1]/dm_step) +1
 				print("Creating DM-time array for DMs ", self.ddplan_instance.dm_boundaries[dm_step_counter-1], self.ddplan_instance.dm_boundaries[dm_step_counter])
-			self._dm_time_array = np.zeros((dm_bins,1))
+			#self._dm_time_array = np.zeros((dm_bins,1))
 			if self.subbanded:
 				self.subband_data()
 			print("Downsampling the filterbank file.")
 			self.dynamic_spectrum = block_reduce(self.original_dynamic_spectrum, block_size=(1,self.ddplan_instance.old_ddplan_downsampling_factor[dm_step_counter].astype(int)*self.initial_downsampling_factor),func=np.mean)
 			print("Dedispersing the file.")
 			if dm_step_counter < 1:
-				dm_time_array = utils.transform(self.dynamic_spectrum, self.header.ftop,self.header.fbottom,self.ddplan_instance.old_ddplan_downsampling_factor[dm_step_counter].astype(int)*self.initial_downsampling_factor*self.header.tsamp, 0, self.ddplan_instance.dm_boundaries[dm_step_counter], self.ddplan_instance.old_ddplan_dm_step[dm_step_counter]).data
+				self._dm_time_array = utils.transform(self.dynamic_spectrum, self.header.ftop,self.header.fbottom,self.ddplan_instance.old_ddplan_downsampling_factor[dm_step_counter].astype(int)*self.initial_downsampling_factor*self.header.tsamp, 0, self.ddplan_instance.dm_boundaries[dm_step_counter], self.ddplan_instance.old_ddplan_dm_step[dm_step_counter]).data
 			else:
-				dm_time_array = utils.transform(self.dynamic_spectrum, self.header.ftop,self.header.fbottom,self.ddplan_instance.old_ddplan_downsampling_factor[dm_step_counter].astype(int)*self.initial_downsampling_factor*self.header.tsamp, self.ddplan_instance.dm_boundaries[dm_step_counter-1], self.ddplan_instance.dm_boundaries[dm_step_counter], self.ddplan_instance.old_ddplan_dm_step[dm_step_counter]).data
-			self._dm_time_array = np.hstack((self.dm_time_array,dm_time_array))
-			self._dm_time_array = self.dm_time_array[::,1::]
+				self._dm_time_array = utils.transform(self.dynamic_spectrum, self.header.ftop,self.header.fbottom,self.ddplan_instance.old_ddplan_downsampling_factor[dm_step_counter].astype(int)*self.initial_downsampling_factor*self.header.tsamp, self.ddplan_instance.dm_boundaries[dm_step_counter-1], self.ddplan_instance.dm_boundaries[dm_step_counter], self.ddplan_instance.old_ddplan_dm_step[dm_step_counter]).data
+			#self._dm_time_array = np.hstack((self.dm_time_array,dm_time_array))
+			#self._dm_time_array = self.dm_time_array[::,1::]
 			self.return_dm_time[dm_step_counter] = self.dm_time_array
 					
 					
@@ -427,7 +443,8 @@ class Hermes(object):
 		This includes time, DM, bounding box info, scores, and image paths.
 		"""
 		data_dict_list = [dict(zip(column_names,row)) for row in self.prediction_information_to_csv[1::]]
-		with open(str(self.output_directory / Path(str(self.time_index)))+"/table_detections.csv", mode='w', newline ='') as file:
+		#with open(str(self.output_directory / Path(str(self.time_index)))+"/table_detections.csv", mode='w', newline ='') as file:
+		with open(str(self.output_directory)+"/table_detections.csv", mode='w', newline ='') as file:
 			writer = csv.DictWriter(file, fieldnames = column_names)
 			writer.writeheader()
 			writer.writerows(data_dict_list)
@@ -469,6 +486,7 @@ class Hermes(object):
 				DM, time = np.where((image_np - np.min(image_np)) * (mask > 0.5) == np.max((image_np - np.min(image_np)) * (mask > 0.5)))
 				DM = DM[0] if len(DM) else 0
 				time = time[0] if len(time) else 0
+				
 
 				row_idx = slice_idx // self.data_processing.slices_num_of_cols
 				col_idx = slice_idx % self.data_processing.slices_num_of_cols
@@ -511,9 +529,93 @@ class Hermes(object):
 
 			plt.close()
 			self.counter += 1
-	
-	def search(self):
+			
+	def _plot_prediction_item(self, item):
 		"""
+		Plots and saves all predictions collected during inference.
+		
+		Each prediction is drawn over the original DM-time image, with bounding boxes and labels.
+		Time and DM axes are scaled, and the output is saved as a PNG file.
+		"""
+		print("LOLOL THIS IS BEING CALLED")
+		prediction = item["prediction"]
+		image = item["image"]
+		slice_idx = item["slice_idx"]
+		dm_index = item["dm_index"]
+		time_index = item["time_index"]
+		file_offset = item["file_offset"]
+		rows = item["rows"]
+		cols = item["cols"]
+
+		binary_mask = np.zeros((self.config.image_size, self.config.image_size))
+		image_np = image.numpy()
+		image_np = image_np[0]
+
+		plt.figure(figsize=(8, 8))
+		plt.imshow(image_np, origin="lower", aspect="auto", vmin=0, vmax=255)
+
+		for k, score in enumerate(prediction['scores']):
+			if score < self.config.threshold:
+				continue
+
+			mask = prediction['masks'][k, 0].numpy()
+			box = prediction['boxes'][k].numpy()
+			color = mcolors.TABLEAU_COLORS[color_list[k]]
+
+			binary_mask += (mask > 0.5).astype(np.uint8)
+
+			DM, time = np.where((image_np - np.min(image_np)) * (mask > 0.5) == np.max((image_np - np.min(image_np)) * (mask > 0.5)))
+			DM = DM[0] if len(DM) else 0
+			time = time[0] if len(time) else 0
+			
+			width = self.config.width_array[time_index]
+			
+			row_idx = slice_idx // cols#self.data_processing.slices_num_of_cols
+			col_idx = slice_idx % cols#self.data_processing.slices_num_of_cols
+
+			dm_val = ((DM + (self.config.image_size - self.config.overlap) * row_idx) *
+				      self.ddplan_instance.old_ddplan_dm_step[dm_index])
+			time_val = ((self.config.image_size - self.config.overlap) * col_idx + time) * \
+				       self.config.tsamp * self.initial_downsampling_factor * 2**dm_index
+
+			#filename = str(self.output_directory / Path(str(time_index))) + f"/{self.counter}_{width}_{round(dm_val, 2)}_{round(time_val, 3)}_{slice_idx}.png"
+			filename = str(self.output_directory) + f"/{self.counter}_{width}_{round(dm_val, 2)}_{round(time_val, 3)}_{slice_idx}.png"
+
+			self.prediction_information_to_csv = np.vstack((self.prediction_information_to_csv, [
+				self.prediction_id, dm_index, width, time_val, dm_val,
+				score.item(), len(prediction['scores']), slice_idx,
+				rows, cols,
+				str(self.filename), time_val + file_offset, filename
+			]))
+			self.prediction_id += 1
+
+			plt.hlines(box[1], box[0], box[2], colors=color, linestyles='dashed', label=f"{score:.4f}")
+			plt.hlines(box[3], box[0], box[2], colors=color, linestyles='dashed')
+			plt.vlines(box[0], box[1], box[3], colors=color, linestyles='dashed')
+			plt.vlines(box[2], box[1], box[3], colors=color, linestyles='dashed')
+			
+		lower_DM = ((self.config.image_size - self.config.overlap) * row_idx) * self.ddplan_instance.old_ddplan_dm_step[dm_index]
+		upper_DM = ((self.config.image_size - self.config.overlap) * (row_idx + 1)) * self.ddplan_instance.old_ddplan_dm_step[dm_index]
+		
+		lower_time = -(self.config.tsamp * self.initial_downsampling_factor * self.config.image_size * 2**dm_index) / 2
+		upper_time = -lower_time
+
+		plt.xticks([0,self.config.image_size//2,self.config.image_size],[round(lower_time,2),0,round(upper_time,2)],fontsize=15)
+		plt.yticks([0,self.config.image_size//2,self.config.image_size],[round(lower_DM,2),round(lower_DM + (upper_DM-lower_DM)/2,2),round(upper_DM,2)],fontsize=15)
+		plt.xlabel("Time range (s)", fontsize=15)
+		plt.ylabel("DM (pc cm$^{-3}$)", fontsize=15)
+		plt.legend(fontsize=15)
+
+		plt.tight_layout()
+		
+		plt.savefig(filename,dpi=200)
+
+		plt.close()
+		self.counter += 1
+	
+	"""
+	def search(self):
+		'''
 		Main entry point to perform a full radio transient search.
 		
 		Steps:
@@ -522,7 +624,7 @@ class Hermes(object):
 			- Run Mask R-CNN inference
 			- Plot results
 			- Save metadata to disk
-		"""
+		'''
 		self.create_ddplan()
 		self.calculate_indeces()
 		self._create_directories(len(self.file_indeces))
@@ -538,7 +640,170 @@ class Hermes(object):
 				self.dm_index = dm_index
 				self.Mask_RCNN_inference(dm_index)
 			self.save_prediction_information()
+			
+	"""
+			
+	def prepare_slices(self, time_index, dm_array):
+		"""
+		Dedisperse and slice a DM-time array for a given time index.
+		
+		Args:
+			time_index (int): Index of the time chunk.
+			dm_array (np.ndarray): Array returned by dedispersion, containing DM-time slices.
+		"""
+		processor = Data_processing(self.config,dm_array)
+		for dm_index in range(len(dm_array)):
+			processor.slice_and_normalize(dm_index)
+			slices = processor.slices_dm_time_array.copy()
+			
+			self.slice_queue.put({
+				"time_index": time_index,
+				"dm_index": dm_index,
+				"slices": slices,
+				"rows": processor.slices_num_of_rows,
+				"cols": processor.slices_num_of_cols
+			})
 	
+	def run_inference_pipeline(self):
+		"""
+		Pulls slice batches from the queue, runs inference, and stores results for plotting.
+		"""
+		print("Pulling slices to GPU and running inference.")
+		while not self.slice_queue.empty():
+			item = self.slice_queue.get()
+			slices = item["slices"]
+			dm_index = item["dm_index"]
+			time_index = item["time_index"]
+			
+			dataset = DataLoader(
+				MyDataset(slices, self.transforms),
+				batch_size = self.config.batch_size,
+				shuffle = False,
+				num_workers = 2,
+				pin_memory = True,
+				prefetch_factor = 128
+			)
+			print("Dataloader created")
+			batch_index = 0
+			with torch.no_grad():
+				for images, _ in dataset:
+					print("Running inference")
+					images = images.to(self.device)
+					predictions = self.model(images)
+					
+					for i, prediction in enumerate(predictions):
+						if len(prediction['scores']) == 0 or prediction['scores'][0].item() < self.config.threshold:
+							continue
+						
+						pred = {
+							k: v[:9].cpu().detach() if torch.is_tensor(v) else v
+							for k, v in prediction.items()
+						}
+						image = images[i].cpu()
+						try:
+							self.results_queue.put({
+								"prediction": pred,
+								"image": image,
+								"slice_idx": batch_index + i,
+								"dm_index": dm_index,
+								"time_index": time_index,
+								"file_offset": self.file_indeces[time_index] * self.header.tsamp, #modify in the future to address PSRFITS format
+								"rows": item["rows"],
+								"cols": item["cols"]
+							}, timeout=5)
+						except Full:
+							print("[Warning] Results queue full - skipping this prediction to avoid stall.")
+					batch_index += len(images)
+				print('Finished gpu inference')
+					
+	def plot_results_pipeline(self):
+		"""
+		Continuously pulls predictions from the results queue and plots/saves images.
+		"""
+		while True:
+			try:
+				item = self.results_queue.get(timeout=1)
+				if item is None:
+					break
+				self._plot_prediction_item(item)
+			except Empty:
+				time.sleep(0.1)
+				continue
+		"""
+		while not self.results_queue.empty():
+			item = self.results_queue.get()
+			self._plot_prediction_item(item)
+		"""
+			
+	def search(self):
+		start_time = time.time()
+		self.create_ddplan()
+		self.calculate_indeces()
+		#self._create_directories(len(self.file_indeces))
+		
+		for time_index in range(len(self.file_indeces)):
+			print(f"Processing time index {time_index}...")
+			
+			self.original_dynamic_spectrum = utils._load_data(
+				str(self.filename), self.file_type,
+				self.file_indeces[time_index],
+				self.number_of_samples_array[time_index],
+				self.header, self.no_rfi_cleaning, self.no_zdot
+			)
+			
+			self.return_dm_time = np.empty(len(self.ddplan_instance.old_ddplan_dm_step), dtype=object)
+			
+			for dm_step_counter, dm_step in enumerate(self.ddplan_instance.old_ddplan_dm_step):
+				"""
+				if dm_step_counter < 1:
+					dm_bins = int(np.ceil(self.ddplan_instance.dm_boundaries[dm_step_counter]/dm_step)) + 1
+				else:
+					dm_bins = int(np.ceil(self.ddplan_instance.dm_boundaries[dm_step_counter]/dm_step)) - int(self.ddplan_instance.dm_boundaries[dm_step_counter-1]/dm_step) +1
+				"""
+				
+				#self._dm_time_array = np.zeros((dm_bins, 1))
+				if self.subbanded:
+					self.subband_data()
+					
+				self.dynamic_spectrum = block_reduce(
+					self.original_dynamic_spectrum,
+					block_size=(1, self.ddplan_instance.old_ddplan_downsampling_factor[dm_step_counter].astype(int) * self.initial_downsampling_factor),
+					func=np.mean
+				)
+				
+				if dm_step_counter < 1:
+					self._dm_time_array = utils.transform(
+						self.dynamic_spectrum, self.header.ftop, self.header.fbottom,
+						self.ddplan_instance.old_ddplan_downsampling_factor[dm_step_counter].astype(int) * self.initial_downsampling_factor * self.header.tsamp,
+						0, self.ddplan_instance.dm_boundaries[dm_step_counter],
+						self.ddplan_instance.old_ddplan_dm_step[dm_step_counter]
+					).data
+				else:
+					self._dm_time_array = utils.transform(
+						self.dynamic_spectrum, self.header.ftop, self.header.fbottom,
+						self.ddplan_instance.old_ddplan_downsampling_factor[dm_step_counter].astype(int) * self.initial_downsampling_factor * self.header.tsamp,
+						self.ddplan_instance.dm_boundaries[dm_step_counter - 1],
+						self.ddplan_instance.dm_boundaries[dm_step_counter],
+						self.ddplan_instance.old_ddplan_dm_step[dm_step_counter]
+					).data
+					
+				#self._dm_time_array = np.hstack((self.dm_time_array, dm_time_array))
+				#self._dm_time_array = self.dm_time_array[:, 1:]
+				self.return_dm_time[dm_step_counter] = self.dm_time_array
+			
+			self.executor.submit(self.prepare_slices, time_index, self.return_dm_time)
+			
+			if time_index > 0:
+				#self.executor.submit(self.plot_results_pipeline)
+				self.run_inference_pipeline()
+				
+		self.run_inference_pipeline()
+		#self.plot_results_pipeline()
+		self.results_queue.put(None)
+		self.plotting_thread.join()
+		self.save_prediction_information()
+		end_time = time.time()
+		print('That took ', end_time-start_time)
 
 def parse_args():
 	parser = argparse.ArgumentParser(
