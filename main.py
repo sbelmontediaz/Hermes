@@ -21,6 +21,7 @@ import time
 import functools as ft
 from skimage.measure import block_reduce
 from astropy.stats import sigma_clipped_stats
+from py_astro_accelerate import *
 
 import logging
 import math
@@ -303,7 +304,78 @@ class Hermes(object):
 			self._dm_time_array = np.hstack((self.dm_time_array,dm_time_array))
 			self._dm_time_array = self.dm_time_array[::,1::]
 			self.return_dm_time[dm_step_counter] = self.dm_time_array
+
+	def aa_dedisperse_fil(self, filename):
+		"""
+		Performs dedispersion using AstroAccelerate for a given filterbank file.
+		
+		Parameters:
+			filename (str): Path to the filterbank file.
+		
+		Returns:
+			dedispersed_data (ndarray): The dedispersed data.
+		"""
+		sigproc_input = aa_py_sigproc_input(filename)
+		metadata = sigproc_input.read_metadata()
+		if not sigproc_input.read_signal():
+			print("ERROR: Invalid .fil file path. Exiting...")
+			sys.exit()
+		input_buffer = sigproc_input.input_buffer()
+
+		# ddtr_plan settings
+		# settings: aa_py_dm(low, high, step, inBin, outBin[depriciated])
+		# NOTE: We do not do any downsampling here, because of a bug in astro-accelerate
+		# library. Temproarily set to 1 and downsampling is done later in conventional fashion.
+		temp_list = []
+		for i in range(len(self.ddplan_instance.old_ddplan_dm_step)):
+			tmp=None
+			if i<1:
+				lowDM = 0
+			else:
+				lowDM = self.ddplan_instance.dm_boundaries[i-1]
+			highDM = self.ddplan_instance.dm_boundaries[i]
+			tmp = aa_py_dm(lowDM,highDM,self.ddplan_instance.old_ddplan_dm_step[i],1,self.ddplan_instance.old_ddplan_downsampling_factor[i].astype(int)*self.initial_downsampling_factor)
+			temp_list.append(tmp)
+		dm_list = np.array(temp_list,dtype=aa_py_dm)
+		# Create ddtr_plan
+		self.ddtr_plan = aa_py_ddtr_plan(dm_list)
+		enable_msd_baseline_noise=False
+		self.ddtr_plan.set_enable_msd_baseline_noise(enable_msd_baseline_noise)
+		self.ddtr_plan.print_info()
+		# Set up pipeline components
+		pipeline_components = aa_py_pipeline_components()
+		pipeline_components.dedispersion = True
+		# Set up pipeline component options	
+		pipeline_options = aa_py_pipeline_component_options()
+		pipeline_options.output_dmt = True
+		#Need to be enabled otherwise there will be no data copy from GPU memory to host memory
+		pipeline_options.copy_ddtr_data_to_host = True
+		# Select GPU card number on this machine
+		card_number = 0
+		# Create pipeline
+		pipeline = aa_py_pipeline(pipeline_components, pipeline_options, metadata, input_buffer, card_number)
+		pipeline.bind_ddtr_plan(self.ddtr_plan) # Bind the ddtr_plan
+		# Run the pipeline with AstroAccelerate
+		while (pipeline.run()):
+			print("NOTICE: Python script running over next chunk")
+			if pipeline.status_code() == -1:
+				print("ERROR: Pipeline status code is {}. The pipeline encountered an error and cannot continue.".format(pipeline.status_code()))
+				break
+		# Get the data of DDTR to python
+		(ts_inc, ddtr_output) = pipeline.get_buffer()
+
+		print("Dedispersion finished. Now downsampling the data.")
+		for dm_step_counter in range(pipeline.ddtr_range()):
+			list_ndms = pipeline.ddtr_ndms()
+			nsamps = int(ts_inc)
 					
+			dm_time_array = np.zeros((list_ndms[dm_step_counter],nsamps))
+			for idm in range(list_ndms[dm_step_counter]):
+				dm_time_array[idm] = np.ctypeslib.as_array( ddtr_output[dm_step_counter][idm] , (int(nsamps),))
+
+			# TODO: Downsampling is done here, ideally it should be done by astro-accelerate
+			dm_time_array = block_reduce(dm_time_array, block_size=(1,self.ddplan_instance.old_ddplan_downsampling_factor[dm_step_counter].astype(int)*self.initial_downsampling_factor),func=np.mean)
+		self.return_dm_time[dm_step_counter] = self.dm_time_array
 					
 	def subband_data(self):
 		chantop = int((self.header.ftop - self.subbanded[0])/np.abs(self.header.foff))
