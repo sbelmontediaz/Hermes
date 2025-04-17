@@ -641,12 +641,13 @@ def parse_args():
 	parser.add_argument('--nchunk', type=int, help='Number of chunks the search will be split into (Number of sub-integrations for PSRF FITS file or seconds of data for filterbank file)',default=100)
 	parser.add_argument('--subband',help='Top frequency and bottom frequency channel to subband the data to. This should be a comma-separated list of the values in MHz.', default=False)
 	parser.add_argument('-aa','--use-astro-accelerate', dest='use_astro_accelerate', help='Use AstroAccelerate for dedispersion', action='store_true')
+	parser.add_argument('-c','--config', help='Configuration file', default=False, required=True)
 	
 	return parser.parse_args()
 	
 if __name__ == '__main__':
 	args = parse_args()
-	config = Config()
+	config = Config(args.config)
 	transform = transforms.Compose([Normalize_DM_time_snap(),ToTensor()])
 	hermes = Hermes(config, args.datapath, args.outdir, args.subband, transform, args.nchunk, args.norficleaning, args.nozdot, args.use_astro_accelerate)
 	hermes.search()
