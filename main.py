@@ -41,6 +41,7 @@ from collections import deque
 from queue import Queue, Empty, Full
 from concurrent.futures import ThreadPoolExecutor
 import threading
+import psutil
 
 #List of colours to produce the plots.
 color_list = np.array(['tab:orange', 'tab:green', 'tab:red', 'tab:purple', 'tab:brown', 'tab:pink', 'tab:gray', 'tab:olive', 'tab:cyan','tab:blue'])
@@ -48,6 +49,34 @@ color_list = np.array(['tab:orange', 'tab:green', 'tab:red', 'tab:purple', 'tab:
 column_names = ['ID','DM_time_range','width_(\u00B5s)', 'time_(s)', 'DM', 'Prediction_score' ,'Burst in image', 'slice_num','rows_in_slice','cols_in_slice','filterbank_file','time_inside_filterbank','ml_prediction_image_name']
 
 
+def log_self_cpu_usage(interval=1.0, log_to_file=False):
+	"""
+	Logs CPU and memory usage of the current Python process (i.e., your script).
+	"""
+	
+	proc = psutil.Process(os.getpid())
+	log = open("self_cpu_usage.log","w") if log_to_file else None
+	
+	try:
+		while True:
+			cpu = proc.cpu_percent(interval=None)
+			mem = float(proc.memory_info().rss) / (1024 ** 2)  # in MB
+			msg = f"[Self Monitor] CPU: {cpu:5.1f}% | RAM: {mem:6.1f} MB"
+			if log_to_file:
+				log.write(msg + "\n")
+				log.flush()
+			else:
+				print(msg, flush=True)
+			time.sleep(interval)
+	except Exception as e:
+		print(f"[Self Monitor] Exception: {e}")
+	finally:
+		if log_to_file:
+			log.close()
+
+def start_self_monitor(interval=1.0, log_to_file=False):
+	t = threading.Thread(target=log_self_cpu_usage, args=(interval, log_to_file), daemon=True)
+	t.start()
 
 #Class to perform data processing of the DM-time transform. It performs the downsampling, slicing and normalisation.
 class Data_processing(object):
@@ -223,11 +252,13 @@ class Hermes(object):
 		self.inference_time = 0	
 		
 		#Multithreading
-		self.slice_queue = Queue(maxsize=20)
-		self.results_queue = Queue(maxsize=20)
-		self.executor = ThreadPoolExecutor(max_workers=20)
+		self.slice_queue = Queue(maxsize=40)
+		self.results_queue = Queue(maxsize=40)
+		self.executor = ThreadPoolExecutor(max_workers=40)
 		self.plotting_thread = threading.Thread(target=self.plot_results_pipeline, daemon=True)
 		self.plotting_thread.start()
+		self.inference_thread = threading.Thread(target=self.run_inference_pipeline, daemon=True)
+		self.inference_thread.start()
 		
 			
 	@property
@@ -537,7 +568,6 @@ class Hermes(object):
 		Each prediction is drawn over the original DM-time image, with bounding boxes and labels.
 		Time and DM axes are scaled, and the output is saved as a PNG file.
 		"""
-		print("LOLOL THIS IS BEING CALLED")
 		prediction = item["prediction"]
 		image = item["image"]
 		slice_idx = item["slice_idx"]
@@ -608,7 +638,7 @@ class Hermes(object):
 
 		plt.tight_layout()
 		
-		plt.savefig(filename,dpi=200)
+		plt.savefig(filename,dpi=150)
 
 		plt.close()
 		self.counter += 1
@@ -668,53 +698,59 @@ class Hermes(object):
 		"""
 		Pulls slice batches from the queue, runs inference, and stores results for plotting.
 		"""
-		print("Pulling slices to GPU and running inference.")
-		while not self.slice_queue.empty():
-			item = self.slice_queue.get()
-			slices = item["slices"]
-			dm_index = item["dm_index"]
-			time_index = item["time_index"]
-			
-			dataset = DataLoader(
-				MyDataset(slices, self.transforms),
-				batch_size = self.config.batch_size,
-				shuffle = False,
-				num_workers = 2,
-				pin_memory = True,
-				prefetch_factor = 128
-			)
-			print("Dataloader created")
-			batch_index = 0
-			with torch.no_grad():
-				for images, _ in dataset:
-					print("Running inference")
-					images = images.to(self.device)
-					predictions = self.model(images)
-					
-					for i, prediction in enumerate(predictions):
-						if len(prediction['scores']) == 0 or prediction['scores'][0].item() < self.config.threshold:
-							continue
+		
+		while True:
+			try:
+				item = self.slice_queue.get(timeout=2)
+				if item is None:
+					print("[Inference] Received sentinel. Exiting inference thread.")
+					break
+
+				slices = item["slices"]
+				dm_index = item["dm_index"]
+				time_index = item["time_index"]
+				
+				dataset = DataLoader(
+					MyDataset(slices, self.transforms),
+					batch_size = self.config.batch_size,
+					shuffle = False,
+					num_workers = 2,
+					pin_memory = True,
+					prefetch_factor = 128
+				)
+				batch_index = 0
+				with torch.no_grad():
+					for images, _ in dataset:
+						images = images.to(self.device)
+						predictions = self.model(images)
 						
-						pred = {
-							k: v[:9].cpu().detach() if torch.is_tensor(v) else v
-							for k, v in prediction.items()
-						}
-						image = images[i].cpu()
-						try:
-							self.results_queue.put({
-								"prediction": pred,
-								"image": image,
-								"slice_idx": batch_index + i,
-								"dm_index": dm_index,
-								"time_index": time_index,
-								"file_offset": self.file_indeces[time_index] * self.header.tsamp, #modify in the future to address PSRFITS format
-								"rows": item["rows"],
-								"cols": item["cols"]
-							}, timeout=5)
-						except Full:
-							print("[Warning] Results queue full - skipping this prediction to avoid stall.")
-					batch_index += len(images)
-				print('Finished gpu inference')
+						for i, prediction in enumerate(predictions):
+							if len(prediction['scores']) == 0 or prediction['scores'][0].item() < self.config.threshold:
+								continue
+							
+							pred = {
+								k: v[:9].cpu().detach() if torch.is_tensor(v) else v
+								for k, v in prediction.items()
+							}
+							image = images[i].cpu()
+							try:
+								self.results_queue.put({
+									"prediction": pred,
+									"image": image,
+									"slice_idx": batch_index + i,
+									"dm_index": dm_index,
+									"time_index": time_index,
+									"file_offset": self.file_indeces[time_index] * self.header.tsamp, #modify in the future to address PSRFITS format
+									"rows": item["rows"],
+									"cols": item["cols"]
+								}, timeout=5)
+							except Full:
+								print("[Warning] Results queue full - skipping this prediction to avoid stall.")
+						batch_index += len(images)
+						
+			except Empty:
+				continue
+		print("[Inference] Inference thread terminated.")
 					
 	def plot_results_pipeline(self):
 		"""
@@ -792,13 +828,16 @@ class Hermes(object):
 				self.return_dm_time[dm_step_counter] = self.dm_time_array
 			
 			self.executor.submit(self.prepare_slices, time_index, self.return_dm_time)
-			
+			"""
 			if time_index > 0:
 				#self.executor.submit(self.plot_results_pipeline)
 				self.run_inference_pipeline()
-				
-		self.run_inference_pipeline()
+			"""
+		#self.run_inference_pipeline()
 		#self.plot_results_pipeline()
+		self.executor.shutdown(wait=True)
+		self.slice_queue.put(None)
+		self.inference_thread.join()
 		self.results_queue.put(None)
 		self.plotting_thread.join()
 		self.save_prediction_information()
@@ -824,6 +863,7 @@ if __name__ == '__main__':
 	config = Config()
 	transform = transforms.Compose([Normalize_DM_time_snap(),ToTensor()])
 	hermes = Hermes(config, args.datapath, args.outdir, args.subband, transform, args.nchunk, args.norficleaning, args.nozdot)
+	#start_self_monitor(interval=2.0, log_to_file=True)
 	hermes.search()
 	
 	
