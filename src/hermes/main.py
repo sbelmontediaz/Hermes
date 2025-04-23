@@ -22,6 +22,7 @@ import functools as ft
 from skimage.measure import block_reduce
 from astropy.stats import sigma_clipped_stats
 from utilities.py_astro_accelerate import *
+import pandas as pd
 
 import logging
 import math
@@ -193,6 +194,7 @@ class Hermes(object):
 		self.ddplan_instance 				= 		ddplan(config,'empty',self.subbanded, str(self.filename))
 		self.use_astro_accelerate			= 		use_astro_accelerate
 		self.use_aa_sigproc					= 		use_astro_accelerate_sigproc
+		self.clustering						=		config.clustering
 		
 		#From search class
 		self._dm_time_array = np.empty((1,1,1))
@@ -604,13 +606,22 @@ class Hermes(object):
 		This includes time, DM, bounding box info, scores, and image paths.
 		"""
 		data_dict_list = [dict(zip(column_names,row)) for row in self.prediction_information_to_csv[1::]]
-		with open(str(self.output_directory / Path(str(self.time_index)))+"/table_detections.csv", mode='w', newline ='') as file:
-			writer = csv.DictWriter(file, fieldnames = column_names)
-			writer.writeheader()
-			writer.writerows(data_dict_list)
-			
-	#Function to plot the burst candidates and save key information.
+
+		detection_df = pd.DataFrame(self.prediction_information_to_csv[1::], columns=column_names)
 	
+		if self.clustering:
+			df_ = pd.DataFrame(columns=detection_df.columns)
+			detection_df['time_(s)'] = pd.to_numeric(detection_df['time_(s)'], errors='coerce')
+			for _ , row in detection_df.iterrows():
+				t_low, t_high = float(row['time_(s)'])-(self.config.max_width*1e-6), float(row['time_(s)'])+(self.config.max_width*1e-6)
+				right_cand = detection_df.query("@t_low <= `time_(s)` <= @t_high").sort_values(by='Prediction_score', ascending=False).iloc[0,:]
+				if right_cand['time_(s)'] not in df_['time_(s)'].values:
+					df_.loc[len(df_)] = right_cand
+			detection_df = df_
+		
+		detection_df.to_csv(str(self.output_directory / Path(str(self.time_index)))+"/table_detections.csv", index=False)
+
+	#Function to plot the burst candidates and save key information.	
 	def plot_collected_predictions(self):
 		"""
 		Plots and saves all predictions collected during inference.

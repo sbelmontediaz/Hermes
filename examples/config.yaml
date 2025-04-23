@@ -2,8 +2,8 @@ bandwidth: 320
 ftop : 1670
 nchans : 4096
 tsamp : 64e-6
-min_width : 256
-max_width : 1024 #16384 #microseconds
+min_width : 1024
+max_width : 8192 #16384 #microseconds
 width_step : 4
 dm_min : 0
 dm_max : 3000
@@ -16,3 +16,4 @@ batch_size : 4
 threshold : 0.1
 weights_directory : "/skatvnas3/raghuttam/hermes/passes_in_full_epochs_22.torch"
 resnet_weights_directory : "/skatvnas3/raghuttam/hermes/"
+clustering : True
