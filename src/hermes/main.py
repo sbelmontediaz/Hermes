@@ -177,7 +177,7 @@ class ToTensor(object):
 		return image
 
 class Hermes(object):
-	def __init__(self,config, filename, output_directory, subbanded, transforms, nsubint=100, no_rfi_cleaning=False, no_zdot=False, use_astro_accelerate=False, multithread = False):
+	def __init__(self,config, filename, output_directory, subbanded, transforms, nsubint=100, no_rfi_cleaning=False, no_zdot=False, use_astro_accelerate=False, multithread = False, use_astro_accelerate_sigproc=False):
 		self.config 						=		config
 		self.filename 						=		Path(filename)				#Name of file to dedisperse
 		self.output_directory				=		Path(output_directory)		#Base directory where data should be saved in (output directory)
@@ -192,6 +192,7 @@ class Hermes(object):
 		self.no_rfi_cleaning 				= 		no_rfi_cleaning
 		self.ddplan_instance 				= 		ddplan(config,'empty',self.subbanded, str(self.filename))
 		self.use_astro_accelerate			= 		use_astro_accelerate
+		self.use_aa_sigproc					= 		use_astro_accelerate_sigproc
 		
 		#From search class
 		self._dm_time_array = np.empty((1,1,1))
@@ -299,7 +300,7 @@ class Hermes(object):
 		Returns:
 			None: Updates internal DM-time array.
 		"""
-		self.original_dynamic_spectrum = utils._load_data(str(self.filename), self.file_type, self.file_indeces[index], self.number_of_samples_array[index], self.header, self.no_rfi_cleaning ,self.no_zdot)
+		self.original_dynamic_spectrum = utils._load_data(str(self.filename), self.file_type, self.file_indeces[index], self.number_of_samples_array[index], self.header, self.no_rfi_cleaning ,self.no_zdot, self.use_aa_sigproc)
 		self.return_dm_time = np.empty(len(self.ddplan_instance.old_ddplan_dm_step),dtype=object)
 		for dm_step_counter, dm_step in enumerate(self.ddplan_instance.old_ddplan_dm_step):
 			#Find how many dm bins you require for the given DM chunk in the ddplan
@@ -911,6 +912,7 @@ def parse_args():
 	parser.add_argument('-aa','--use-astro-accelerate', dest='use_astro_accelerate', help='Use AstroAccelerate for dedispersion', action='store_true')
 	parser.add_argument('-c','--config', help='Configuration file', default=False, required=True)
 	parser.add_argument('-p','--multithread', help='Run pipeline in multiple threads to save time.', action='store_true')
+	parser.add_argument('--use-aa-sigproc', dest='use_astro_accelerate_sigproc', help='Use AstroAccelerate with sigproc input format', action='store_true')
 	
 	return parser.parse_args()
 	
@@ -918,7 +920,7 @@ if __name__ == '__main__':
 	args = parse_args()
 	config = Config(args.config)
 	transform = transforms.Compose([Normalize_DM_time_snap(),ToTensor()])
-	hermes = Hermes(config, args.datapath, args.outdir, args.subband, transform, args.nchunk, args.norficleaning, args.nozdot, args.use_astro_accelerate, args.multithread)
+	hermes = Hermes(config, args.datapath, args.outdir, args.subband, transform, args.nchunk, args.norficleaning, args.nozdot, args.use_astro_accelerate, args.multithread, args.use_astro_accelerate_sigproc)
 	hermes.search()
 	
 	
