@@ -2,15 +2,15 @@ bandwidth: 320
 ftop : 1670
 nchans : 4096
 tsamp : 64e-6
-min_width : 1024
+min_width : 512 # microseconds
 max_width : 8192 #16384 #microseconds
-width_step : 4
+width_step : 2
 dm_min : 0
-dm_max : 3000
+dm_max : 4000
 window_size : 256
 image_size : 1024
-overlap : 50
-fudge_factor : 50
+overlap : 5
+fudge_factor : 5
 num_of_classes : 2
 batch_size : 4
 threshold : 0.1
