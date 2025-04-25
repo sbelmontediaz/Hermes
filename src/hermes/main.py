@@ -662,9 +662,9 @@ class Hermes(object):
 				col_idx = slice_idx % self.data_processing.slices_num_of_cols
 
 				dm_val = ((DM + (self.config.image_size - self.config.overlap) * row_idx) *
-					      self.ddplan_instance.old_ddplan_dm_step[dm_index])
+					      self.ddplan_instance.old_ddplan_dm_step[dm_index]) * self._downsample_factors
 				time_val = ((self.config.image_size - self.config.overlap) * col_idx + time) * \
-					       self.config.tsamp * self.initial_downsampling_factor * 2**dm_index
+					       self.config.tsamp * 2**dm_index * self._downsample_factors
 
 				filename = str(self.output_directory / Path(str(time_index))) + f"/{self.counter}_{self.width}_{round(dm_val, 2)}_{round(time_val, 3)}_{slice_idx}.png"
 
@@ -681,10 +681,10 @@ class Hermes(object):
 				plt.vlines(box[0], box[1], box[3], colors=color, linestyles='dashed')
 				plt.vlines(box[2], box[1], box[3], colors=color, linestyles='dashed')
 				
-			lower_DM = ((self.config.image_size - self.config.overlap) * row_idx) * self.ddplan_instance.old_ddplan_dm_step[dm_index]
-			upper_DM = ((self.config.image_size - self.config.overlap) * (row_idx + 1)) * self.ddplan_instance.old_ddplan_dm_step[dm_index]
+			lower_DM = ((self.config.image_size - self.config.overlap) * row_idx) * self.ddplan_instance.old_ddplan_dm_step[dm_index]* self._downsample_factors
+			upper_DM = ((self.config.image_size - self.config.overlap) * (row_idx + 1)) * self.ddplan_instance.old_ddplan_dm_step[dm_index]* self._downsample_factors
 			
-			lower_time = -(self.config.tsamp * self.initial_downsampling_factor * self.config.image_size * 2**dm_index) / 2
+			lower_time = -(self.config.tsamp * self._downsample_factors * self.config.image_size * 2**dm_index) / 2
 			upper_time = -lower_time
 
 			plt.xticks([0,self.config.image_size//2,self.config.image_size],[round(lower_time,2),0,round(upper_time,2)],fontsize=15)
@@ -831,7 +831,14 @@ class Hermes(object):
 			self.data_processing = Data_processing(self.config,self.return_dm_time)
 			for dm_index in range(len(self.return_dm_time)):
 				self.dm_index = dm_index
+				self._downsample_factors = self.ddplan_instance.old_ddplan_downsampling_factor[dm_index].astype(int)
 				self.Mask_RCNN_inference(dm_index)
+			
+			for counter in range(self.dm_index+1,len(self.config.width_array)):
+				self._downsample_factors *= 2
+				self.Mask_RCNN_inference(counter)
+				counter += 1
+
 			self.save_prediction_information()
 		end_time = time.time()
 		print("That took ", end_time - start_time)
