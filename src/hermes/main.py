@@ -36,6 +36,11 @@ from torchvision.models.detection import MaskRCNN
 from torchvision.models.detection.backbone_utils import resnet_fpn_backbone
 from collections import deque
 
+from queue import Queue, Empty, Full
+from concurrent.futures import ThreadPoolExecutor
+import threading
+import psutil
+
 #List of colours to produce the plots.
 color_list = np.array(['tab:orange', 'tab:green', 'tab:red', 'tab:purple', 'tab:brown', 'tab:pink', 'tab:gray', 'tab:olive', 'tab:cyan','tab:blue'])
 #Headers of the information saved in the csv file.
@@ -172,7 +177,7 @@ class ToTensor(object):
 		return image
 
 class Hermes(object):
-	def __init__(self,config, filename, output_directory, subbanded, transforms, nsubint=100, no_rfi_cleaning=False, no_zdot=False, use_astro_accelerate=False):
+	def __init__(self,config, filename, output_directory, subbanded, transforms, nsubint=100, no_rfi_cleaning=False, no_zdot=False, use_astro_accelerate=False, multithread = False):
 		self.config 						=		config
 		self.filename 						=		Path(filename)				#Name of file to dedisperse
 		self.output_directory				=		Path(output_directory)		#Base directory where data should be saved in (output directory)
@@ -214,6 +219,18 @@ class Hermes(object):
 		self.redownsample_factor = 1
 		self.counter = 0	
 		self.inference_time = 0	
+		
+		#Multithread
+		self.multithread = multithread
+		if self.multithread:
+			self.slice_queue = Queue(maxsize=40)
+			self.results_queue = Queue(maxsize=40)
+			self.executor = ThreadPoolExecutor(max_workers=40)
+			self.plotting_thread = threading.Thread(target=self.plot_results_pipeline, daemon=True)
+			self.plotting_thread.start()
+			self.inference_thread = threading.Thread(target=self.run_inference_pipeline, daemon=True)
+			self.inference_thread.start()
+		
 		
 			
 	@property
@@ -477,6 +494,63 @@ class Hermes(object):
 
 				self.batch_index += len(image_batch)
 	
+	def run_inference_pipeline(self):
+		"""
+		Pulls slice batches from the queue, runs inference, and stores results for plotting.
+		"""
+		
+		while True:
+			try:
+				item = self.slice_queue.get(timeout=2)
+				if item is None:
+					print("[Inference] Received sentinel. Exiting inference thread.")
+					break
+
+				slices = item["slices"]
+				dm_index = item["dm_index"]
+				time_index = item["time_index"]
+				
+				dataset = DataLoader(
+					MyDataset(slices, self.transforms),
+					batch_size = self.config.batch_size,
+					shuffle = False,
+					num_workers = 2,
+					pin_memory = True,
+					prefetch_factor = 128
+				)
+				batch_index = 0
+				with torch.no_grad():
+					for images, _ in dataset:
+						images = images.to(self.device)
+						predictions = self.model(images)
+						
+						for i, prediction in enumerate(predictions):
+							if len(prediction['scores']) == 0 or prediction['scores'][0].item() < self.config.threshold:
+								continue
+							
+							pred = {
+								k: v[:9].cpu().detach() if torch.is_tensor(v) else v
+								for k, v in prediction.items()
+							}
+							image = images[i].cpu()
+							try:
+								self.results_queue.put({
+									"prediction": pred,
+									"image": image,
+									"slice_idx": batch_index + i,
+									"dm_index": dm_index,
+									"time_index": time_index,
+									"file_offset": self.file_indeces[time_index] * self.header.tsamp, #modify in the future to address PSRFITS format
+									"rows": item["rows"],
+									"cols": item["cols"]
+								}, timeout=5)
+							except Full:
+								print("[Warning] Results queue full - skipping this prediction to avoid stall.")
+						batch_index += len(images)
+						
+			except Empty:
+				continue
+		print("[Inference] Inference thread terminated.")
 					
 	#Main function to peform the search.
 	def Mask_RCNN_inference(self, index):
@@ -500,6 +574,27 @@ class Hermes(object):
 		self.inference(dataset)
 		self.plot_collected_predictions()
 		print("Done. Number of images processed:", self.number_of_images)
+	
+	def prepare_slices(self, time_index, dm_array):
+		"""
+		Dedisperse and slice a DM-time array for a given time index.
+		
+		Args:
+			time_index (int): Index of the time chunk.
+			dm_array (np.ndarray): Array returned by dedispersion, containing DM-time slices.
+		"""
+		processor = Data_processing(self.config,dm_array)
+		for dm_index in range(len(dm_array)):
+			processor.slice_and_normalize(dm_index)
+			slices = processor.slices_dm_time_array.copy()
+			
+			self.slice_queue.put({
+				"time_index": time_index,
+				"dm_index": dm_index,
+				"slices": slices,
+				"rows": processor.slices_num_of_rows,
+				"cols": processor.slices_num_of_cols
+			})
 	
 	#Save the information of the candidates in a csv file to inspect later.
 	def save_prediction_information(self):
@@ -592,6 +687,102 @@ class Hermes(object):
 
 			plt.close()
 			self.counter += 1
+			
+			
+	def _plot_prediction_item(self, item):
+		"""
+		Plots and saves all predictions collected during inference.
+		
+		Each prediction is drawn over the original DM-time image, with bounding boxes and labels.
+		Time and DM axes are scaled, and the output is saved as a PNG file.
+		"""
+		prediction = item["prediction"]
+		image = item["image"]
+		slice_idx = item["slice_idx"]
+		dm_index = item["dm_index"]
+		time_index = item["time_index"]
+		file_offset = item["file_offset"]
+		rows = item["rows"]
+		cols = item["cols"]
+
+		binary_mask = np.zeros((self.config.image_size, self.config.image_size))
+		image_np = image.numpy()
+		image_np = image_np[0]
+
+		plt.figure(figsize=(8, 8))
+		plt.imshow(image_np, origin="lower", aspect="auto", vmin=0, vmax=255)
+
+		for k, score in enumerate(prediction['scores']):
+			if score < self.config.threshold:
+				continue
+
+			mask = prediction['masks'][k, 0].numpy()
+			box = prediction['boxes'][k].numpy()
+			color = mcolors.TABLEAU_COLORS[color_list[k]]
+
+			binary_mask += (mask > 0.5).astype(np.uint8)
+
+			DM, time = np.where((image_np - np.min(image_np)) * (mask > 0.5) == np.max((image_np - np.min(image_np)) * (mask > 0.5)))
+			DM = DM[0] if len(DM) else 0
+			time = time[0] if len(time) else 0
+			
+			width = self.config.width_array[time_index]
+			
+			row_idx = slice_idx // cols
+			col_idx = slice_idx % cols
+
+			dm_val = ((DM + (self.config.image_size - self.config.overlap) * row_idx) *
+				      self.ddplan_instance.old_ddplan_dm_step[dm_index])
+			time_val = ((self.config.image_size - self.config.overlap) * col_idx + time) * \
+				       self.config.tsamp * self.initial_downsampling_factor * 2**dm_index
+
+			filename = str(self.output_directory) + f"/{self.counter}_{width}_{round(dm_val, 2)}_{round(time_val, 3)}_{slice_idx}.png"
+
+			self.prediction_information_to_csv = np.vstack((self.prediction_information_to_csv, [
+				self.prediction_id, dm_index, width, time_val, dm_val,
+				score.item(), len(prediction['scores']), slice_idx,
+				rows, cols,
+				str(self.filename), time_val + file_offset, filename
+			]))
+			self.prediction_id += 1
+
+			plt.hlines(box[1], box[0], box[2], colors=color, linestyles='dashed', label=f"{score:.4f}")
+			plt.hlines(box[3], box[0], box[2], colors=color, linestyles='dashed')
+			plt.vlines(box[0], box[1], box[3], colors=color, linestyles='dashed')
+			plt.vlines(box[2], box[1], box[3], colors=color, linestyles='dashed')
+			
+		lower_DM = ((self.config.image_size - self.config.overlap) * row_idx) * self.ddplan_instance.old_ddplan_dm_step[dm_index]
+		upper_DM = ((self.config.image_size - self.config.overlap) * (row_idx + 1)) * self.ddplan_instance.old_ddplan_dm_step[dm_index]
+		
+		lower_time = -(self.config.tsamp * self.initial_downsampling_factor * self.config.image_size * 2**dm_index) / 2
+		upper_time = -lower_time
+
+		plt.xticks([0,self.config.image_size//2,self.config.image_size],[round(lower_time,2),0,round(upper_time,2)],fontsize=15)
+		plt.yticks([0,self.config.image_size//2,self.config.image_size],[round(lower_DM,2),round(lower_DM + (upper_DM-lower_DM)/2,2),round(upper_DM,2)],fontsize=15)
+		plt.xlabel("Time range (s)", fontsize=15)
+		plt.ylabel("DM (pc cm$^{-3}$)", fontsize=15)
+		plt.legend(fontsize=15)
+
+		plt.tight_layout()
+		
+		plt.savefig(filename,dpi=150)
+
+		plt.close()
+		self.counter += 1
+	
+	def plot_results_pipeline(self):
+		"""
+		Continuously pulls predictions from the results queue and plots/saves images.
+		"""
+		while True:
+			try:
+				item = self.results_queue.get(timeout=1)
+				if item is None:
+					break
+				self._plot_prediction_item(item)
+			except Empty:
+				time.sleep(0.1)
+				continue
 	
 	def search(self):
 		"""
@@ -604,6 +795,9 @@ class Hermes(object):
 			- Plot results
 			- Save metadata to disk
 		"""
+		if self.multithread:
+			return self.search_thread()
+		start_time = time.time()
 		self.create_ddplan()
 		self.calculate_indeces()
 		self._create_directories(len(self.file_indeces))
@@ -627,6 +821,80 @@ class Hermes(object):
 				self.dm_index = dm_index
 				self.Mask_RCNN_inference(dm_index)
 			self.save_prediction_information()
+		end_time = time.time()
+		print("That took ", end_time - start_time)
+		
+	def search_thread(self):
+		"""
+		Handle the multithreaded transient search:
+			- Loading and preprocessing of input filterbank data
+			- Parallel dedispersion and DM-time slicing
+			- Feeding sliced images to a GPU-based Mask R-CNN inference thread
+			- Collecting and plotting predictions in a separate background thread
+		
+		Notes:
+			- Inference and plotting threads are started in `__init__()` and run concurrently.
+			- Dedispersion and slicing tasks are submitted via a thread pool executor.
+		
+		Raises:
+			RuntimeError: If background threads fail to start or complete.
+		"""
+		start_time = time.time()
+		self.create_ddplan()
+		self.calculate_indeces()
+		#self._create_directories(len(self.file_indeces))
+		
+		for time_index in range(len(self.file_indeces)):
+			print(f"Processing time index {time_index}...")
+			
+			self.original_dynamic_spectrum = utils._load_data(
+				str(self.filename), self.file_type,
+				self.file_indeces[time_index],
+				self.number_of_samples_array[time_index],
+				self.header, self.no_rfi_cleaning, self.no_zdot
+			)
+			
+			self.return_dm_time = np.empty(len(self.ddplan_instance.old_ddplan_dm_step), dtype=object)
+			
+			for dm_step_counter, dm_step in enumerate(self.ddplan_instance.old_ddplan_dm_step):
+				if self.subbanded:
+					self.subband_data()
+					
+				self.dynamic_spectrum = block_reduce(
+					self.original_dynamic_spectrum,
+					block_size=(1, self.ddplan_instance.old_ddplan_downsampling_factor[dm_step_counter].astype(int) * self.initial_downsampling_factor),
+					func=np.mean
+				)
+				
+				if dm_step_counter < 1:
+					self._dm_time_array = utils.transform(
+						self.dynamic_spectrum, self.header.ftop, self.header.fbottom,
+						self.ddplan_instance.old_ddplan_downsampling_factor[dm_step_counter].astype(int) * self.initial_downsampling_factor * self.header.tsamp,
+						0, self.ddplan_instance.dm_boundaries[dm_step_counter],
+						self.ddplan_instance.old_ddplan_dm_step[dm_step_counter]
+					).data
+				else:
+					self._dm_time_array = utils.transform(
+						self.dynamic_spectrum, self.header.ftop, self.header.fbottom,
+						self.ddplan_instance.old_ddplan_downsampling_factor[dm_step_counter].astype(int) * self.initial_downsampling_factor * self.header.tsamp,
+						self.ddplan_instance.dm_boundaries[dm_step_counter - 1],
+						self.ddplan_instance.dm_boundaries[dm_step_counter],
+						self.ddplan_instance.old_ddplan_dm_step[dm_step_counter]
+					).data
+					
+				
+				self.return_dm_time[dm_step_counter] = self.dm_time_array
+			
+			self.executor.submit(self.prepare_slices, time_index, self.return_dm_time)
+			
+		self.executor.shutdown(wait=True)
+		self.slice_queue.put(None)
+		self.inference_thread.join()
+		self.results_queue.put(None)
+		self.plotting_thread.join()
+		self.save_prediction_information()
+		end_time = time.time()
+		print('That took ', end_time-start_time)
 	
 
 def parse_args():
@@ -642,6 +910,7 @@ def parse_args():
 	parser.add_argument('--subband',help='Top frequency and bottom frequency channel to subband the data to. This should be a comma-separated list of the values in MHz.', default=False)
 	parser.add_argument('-aa','--use-astro-accelerate', dest='use_astro_accelerate', help='Use AstroAccelerate for dedispersion', action='store_true')
 	parser.add_argument('-c','--config', help='Configuration file', default=False, required=True)
+	parser.add_argument('-p','--multithread', help='Run pipeline in multiple threads to save time.', action='store_true')
 	
 	return parser.parse_args()
 	
@@ -649,7 +918,7 @@ if __name__ == '__main__':
 	args = parse_args()
 	config = Config(args.config)
 	transform = transforms.Compose([Normalize_DM_time_snap(),ToTensor()])
-	hermes = Hermes(config, args.datapath, args.outdir, args.subband, transform, args.nchunk, args.norficleaning, args.nozdot, args.use_astro_accelerate)
+	hermes = Hermes(config, args.datapath, args.outdir, args.subband, transform, args.nchunk, args.norficleaning, args.nozdot, args.use_astro_accelerate, args.multithread)
 	hermes.search()
 	
 	
