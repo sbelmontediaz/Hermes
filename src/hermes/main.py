@@ -21,7 +21,10 @@ import time
 import functools as ft
 from skimage.measure import block_reduce
 from astropy.stats import sigma_clipped_stats
-from utilities.py_astro_accelerate import *
+try:
+	from utilities.py_astro_accelerate import *
+except:
+	print("Cannot use any AstroAccelerate features. Please check your installation.")
 import pandas as pd
 
 import logging
