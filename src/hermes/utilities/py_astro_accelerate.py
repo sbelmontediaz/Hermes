@@ -11,8 +11,10 @@ import ctypes
 import numpy as np
 
 # PATH TO COMPILED ASTRO-ACCELERATE LIBRARY
-lib = ctypes.CDLL('data/libastroaccelerate.so')
-
+try:
+    lib = ctypes.CDLL('data/libastroaccelerate.so')
+except:
+    pass
 # Define ctypes for float pointers
 FLOAT = ctypes.c_float
 PFLOAT = ctypes.POINTER(FLOAT)
