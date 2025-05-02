@@ -10,11 +10,13 @@ if (sys.version_info < (3, 0)):
 import ctypes
 import numpy as np
 
-# PATH TO COMPILED ASTRO-ACCELERATE LIBRARY
 try:
+    # PATH TO COMPILED ASTRO-ACCELERATE LIBRARY
     lib = ctypes.CDLL('data/libastroaccelerate.so')
 except:
+    print("ERROR: Unable to load the library. Please check the path to the compiled library.")
     pass
+
 # Define ctypes for float pointers
 FLOAT = ctypes.c_float
 PFLOAT = ctypes.POINTER(FLOAT)
