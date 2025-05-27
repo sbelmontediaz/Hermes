@@ -14,6 +14,8 @@ from sigpyproc.block import FilterbankBlock
 from sigpyproc.core.stats import ChannelStats
 from sigpyproc.header import Header
 
+from utilities.py_astro_accelerate import *
+
 def create_filterbank_block(data: np.ndarray, header: Header) -> FilterbankBlock:
     """
     Create a FilterbankBlock from a NumPy array and a Header.
@@ -628,7 +630,7 @@ def apply_channel_mask(
         kernels.mask_channels(datachunk, mask, maskvalue, header.nchans, nsamps)
     return data
 
-def _load_data(fname, file_type, starting_sample, number_samples, header, no_rfi_cleaning=False, no_zdot=False):
+def _load_data(fname, file_type, starting_sample, number_samples, header, no_rfi_cleaning=False, no_zdot=False, use_aa_sigproc=False):
 	"""
 	Load a block of data from a radio observation and perform RFI cleaning. The RFI cleaning can be zdot and IQRM.
 
@@ -672,11 +674,22 @@ def _load_data(fname, file_type, starting_sample, number_samples, header, no_rfi
 		
 		return myBlock
 	else:
-		myFil = sigpyproc.readers.FilReader(fname)
-		try:
-			myBlock = myFil.read_block(starting_sample, number_samples)
-		except ValueError:
-			myBlock = myFil.read_block(starting_sample, header.nsamples-starting_sample)
+		# TODO: Remove the dependency on astro-accelerate and write a class to read the filterbank file
+		# using the any C++ library so that we get the functionality to read the filterbank file
+		# from anywhere in between the file. For now, the chunks need to be divided separately
+		if use_aa_sigproc:
+			with aa_py_sigproc_input(fname) as sigproc_input:
+				metadata = sigproc_input.read_metadata()
+				sigproc_input.read_signal()
+				buffer = sigproc_input.input_buffer()
+				myBlock = np.ctypeslib.as_array(buffer, shape=(int(header.nchans*header.nsamples),)).astype(np.uint8)
+				myBlock = myBlock.reshape((int(header.nchans), int(header.nsamples)))
+		else:
+			myFil = sigpyproc.readers.FilReader(fname)
+			try:
+				myBlock = myFil.read_block(starting_sample, number_samples)
+			except ValueError:
+				myBlock = myFil.read_block(starting_sample, header.nsamples-starting_sample)
 		if not no_zdot:
 			myBlock = zdot(myBlock)
 		if not no_rfi_cleaning:
