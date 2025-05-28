@@ -2,11 +2,11 @@ bandwidth: 320
 ftop : 1670
 nchans : 4096
 tsamp : 64e-6
-min_width : 512 # microseconds
-max_width : 16384 #8192 #16384 #microseconds
-width_step : 2
+min_width : 256
+max_width : 1024 #16384 #microseconds
+width_step : 4
 dm_min : 0
-dm_max : 8000
+dm_max : 3000
 window_size : 256
 image_size : 1024
 overlap : 50
@@ -14,8 +14,5 @@ fudge_factor : 50
 num_of_classes : 2
 batch_size : 4
 threshold : 0.1
-weights_directory : "/scratch/nas_spiders/belmonte/PhD_continuation/FRB_Net/FRB_Net_pytorch/parameters/50/passes_in_full_epochs_22.torch"
-resnet_weights_directory : "/scratch/nas_spiders/belmonte/PhD_continuation/FRB_Net/"
-#weights_directory : "/skatvnas3/raghuttam/hermes/passes_in_full_epochs_22.torch"
-#resnet_weights_directory : "/skatvnas3/raghuttam/hermes/"
-clustering : True
+weights_directory : "/skatvnas3/raghuttam/hermes/passes_in_full_epochs_22.torch"
+resnet_weights_directory : "/skatvnas3/raghuttam/hermes/"

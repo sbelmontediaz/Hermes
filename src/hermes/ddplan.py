@@ -167,10 +167,6 @@ class ddplan(object):
 	@property
 	def old_ddplan_dm_step(self):
 		return (self._old_ddplan_dm_step)
-		
-	@property
-	def new_ddplan_dm_step(self):
-		return (self._new_ddplan_dm_step)
 
 	@property
 	def old_ddplan_downsampling_factor(self):
@@ -297,11 +293,11 @@ class ddplan(object):
 		
 		print("The dedispersion plan generated looks like the following: ")
 		print("DM min\tDM max\tDM step\tNum of DMs Percentage of DMs")
-		for i in range(len(self.dm_trials)):
+		for i in range(len(self.old_ddplan_dm_min)):
 			if i < 1:
-				print(0,'\t',round(self.dm_boundaries[i],1),'\t',round(self.new_ddplan_dm_step[i],3),'\t',self.dm_trials[i],'\t',round(self.dm_trials[i]/self.dm_trials.sum()*100,1),'%')
+				print(0,'\t',round(self.dm_boundaries[i],1),'\t',round(self.old_ddplan_dm_step[i],3),'\t',self.dm_trials[i],'\t',round(self.dm_trials[i]/self.dm_trials.sum()*100,1),'%')
 			else:
-				print(round(self.dm_boundaries[i-1],1),'\t',round(self.dm_boundaries[i],1),'\t',round(self.new_ddplan_dm_step[i],3),'\t',self.dm_trials[i],'\t',round(self.dm_trials[i]/self.dm_trials.sum()*100,1),'%')
+				print(round(self.dm_boundaries[i-1],1),'\t',round(self.dm_boundaries[i],1),'\t',round(self.old_ddplan_dm_step[i],3),'\t',self.dm_trials[i],'\t',round(self.dm_trials[i]/self.dm_trials.sum()*100,1),'%')
 		print("Total number of DMs searched: ", self.dm_trials.sum())
 
 	def plot_ddplan(self):
@@ -428,12 +424,7 @@ class ddplan(object):
 				remainder = self.inverse_sum_powers_two(self.dm_trials) - self.config.image_size - self.closest_integer_of_full_windows_before(self.inverse_sum_powers_two(self.dm_trials)) * (self.config.image_size - self.config.overlap)
 				self._dm_trials = np.append(self.dm_trials, self.closest_integer_of_full_windows_next((self.old_ddplan_dm_max[dm_range] - self.dm_boundaries[-1])/self.old_ddplan_dm_step[dm_range] + remainder) * (self.config.image_size - self.config.overlap) + self.config.image_size - remainder)
 				self._dm_boundaries = np.append(self.dm_boundaries, self.dm_trials[-1]*self.old_ddplan_dm_step[dm_range] + self.dm_boundaries[-1])
-		self._new_ddplan_dm_step = self.old_ddplan_dm_step.copy()
-		if self.dm_trials[-1] < self.config.image_size and self.dm_boundaries[-1] > self.config.dm_max:
-			self._dm_trials = self.dm_trials[:-1]
-			self._dm_boundaries = self.dm_boundaries[:-1]
-			self._new_ddplan_dm_step = self.new_ddplan_dm_step[:-1]
-			
+		
 
 
 def main(fname,outfname):

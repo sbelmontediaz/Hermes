@@ -3,9 +3,6 @@ import argparse
 import sys, os
 from config import Config
 
-import matplotlib
-matplotlib.use('Agg')
-
 import matplotlib.pyplot as plt
 import csv
 import glob
@@ -24,11 +21,7 @@ import time
 import functools as ft
 from skimage.measure import block_reduce
 from astropy.stats import sigma_clipped_stats
-try:
-	from utilities.py_astro_accelerate import *
-except:
-	print("Cannot use any AstroAccelerate features. Please check your installation.")
-import pandas as pd
+from utilities.py_astro_accelerate import *
 
 import logging
 import math
@@ -124,7 +117,7 @@ class Data_processing(object):
 		
 	#Function to slice the array and normalise the slices by scaling the set to have zero mean and std of unity.
 	def slice_and_normalize(self,index):
-		#print("Slicing DM-time array number ", index)
+		print("Slicing DM-time array number ", index)
 		#If index is larger than max DM range, do not merge, just downsample
 		if index >= self.dm_time_array.shape[0]:
 			index = self.dm_time_array.shape[0]-1
@@ -184,7 +177,7 @@ class ToTensor(object):
 		return image
 
 class Hermes(object):
-	def __init__(self,config, filename, output_directory, subbanded, transforms, nsubint=100, no_rfi_cleaning=False, no_zdot=False, use_astro_accelerate=False, multithread = False, use_astro_accelerate_sigproc=False):
+	def __init__(self,config, filename, output_directory, subbanded, transforms, nsubint=100, no_rfi_cleaning=False, no_zdot=False, use_astro_accelerate=False, multithread = False):
 		self.config 						=		config
 		self.filename 						=		Path(filename)				#Name of file to dedisperse
 		self.output_directory				=		Path(output_directory)		#Base directory where data should be saved in (output directory)
@@ -199,8 +192,6 @@ class Hermes(object):
 		self.no_rfi_cleaning 				= 		no_rfi_cleaning
 		self.ddplan_instance 				= 		ddplan(config,'empty',self.subbanded, str(self.filename))
 		self.use_astro_accelerate			= 		use_astro_accelerate
-		self.use_aa_sigproc					= 		use_astro_accelerate_sigproc
-		self.clustering						=		config.clustering
 		
 		#From search class
 		self._dm_time_array = np.empty((1,1,1))
@@ -235,8 +226,6 @@ class Hermes(object):
 			self.slice_queue = Queue(maxsize=40)
 			self.results_queue = Queue(maxsize=40)
 			self.executor = ThreadPoolExecutor(max_workers=40)
-			self.inference_pbar = tqdm(total=0, desc="GPU Inference", position=1)
-			self.plotting_pbar = tqdm(total=0, desc="Plotting", position=2)
 			self.plotting_thread = threading.Thread(target=self.plot_results_pipeline, daemon=True)
 			self.plotting_thread.start()
 			self.inference_thread = threading.Thread(target=self.run_inference_pipeline, daemon=True)
@@ -310,9 +299,9 @@ class Hermes(object):
 		Returns:
 			None: Updates internal DM-time array.
 		"""
-		self.original_dynamic_spectrum = utils._load_data(str(self.filename), self.file_type, self.file_indeces[index], self.number_of_samples_array[index], self.header, self.no_rfi_cleaning ,self.no_zdot, self.use_aa_sigproc)
-		self.return_dm_time = np.empty(len(self.ddplan_instance.new_ddplan_dm_step),dtype=object)
-		for dm_step_counter, dm_step in enumerate(self.ddplan_instance.new_ddplan_dm_step):
+		self.original_dynamic_spectrum = utils._load_data(str(self.filename), self.file_type, self.file_indeces[index], self.number_of_samples_array[index], self.header, self.no_rfi_cleaning ,self.no_zdot)
+		self.return_dm_time = np.empty(len(self.ddplan_instance.old_ddplan_dm_step),dtype=object)
+		for dm_step_counter, dm_step in enumerate(self.ddplan_instance.old_ddplan_dm_step):
 			#Find how many dm bins you require for the given DM chunk in the ddplan
 			if dm_step_counter < 1:
 				print("Creating DM-time array for DMs ",0, self.ddplan_instance.dm_boundaries[dm_step_counter])
@@ -327,9 +316,9 @@ class Hermes(object):
 			self.dynamic_spectrum = block_reduce(self.original_dynamic_spectrum, block_size=(1,self.ddplan_instance.old_ddplan_downsampling_factor[dm_step_counter].astype(int)*self.initial_downsampling_factor),func=np.mean)
 			print("Dedispersing the file.")
 			if dm_step_counter < 1:
-				dm_time_array = utils.transform(self.dynamic_spectrum, self.header.ftop,self.header.fbottom,self.ddplan_instance.old_ddplan_downsampling_factor[dm_step_counter].astype(int)*self.initial_downsampling_factor*self.header.tsamp, 0, self.ddplan_instance.dm_boundaries[dm_step_counter], self.ddplan_instance.new_ddplan_dm_step[dm_step_counter]).data
+				dm_time_array = utils.transform(self.dynamic_spectrum, self.header.ftop,self.header.fbottom,self.ddplan_instance.old_ddplan_downsampling_factor[dm_step_counter].astype(int)*self.initial_downsampling_factor*self.header.tsamp, 0, self.ddplan_instance.dm_boundaries[dm_step_counter], self.ddplan_instance.old_ddplan_dm_step[dm_step_counter]).data
 			else:
-				dm_time_array = utils.transform(self.dynamic_spectrum, self.header.ftop,self.header.fbottom,self.ddplan_instance.old_ddplan_downsampling_factor[dm_step_counter].astype(int)*self.initial_downsampling_factor*self.header.tsamp, self.ddplan_instance.dm_boundaries[dm_step_counter-1], self.ddplan_instance.dm_boundaries[dm_step_counter], self.ddplan_instance.new_ddplan_dm_step[dm_step_counter]).data
+				dm_time_array = utils.transform(self.dynamic_spectrum, self.header.ftop,self.header.fbottom,self.ddplan_instance.old_ddplan_downsampling_factor[dm_step_counter].astype(int)*self.initial_downsampling_factor*self.header.tsamp, self.ddplan_instance.dm_boundaries[dm_step_counter-1], self.ddplan_instance.dm_boundaries[dm_step_counter], self.ddplan_instance.old_ddplan_dm_step[dm_step_counter]).data
 			self._dm_time_array = np.hstack((self.dm_time_array,dm_time_array))
 			self._dm_time_array = self.dm_time_array[::,1::]
 			self.return_dm_time[dm_step_counter] = self.dm_time_array
@@ -356,14 +345,14 @@ class Hermes(object):
 		# NOTE: We do not do any downsampling here, because of a bug in astro-accelerate
 		# library. Temproarily set to 1 and downsampling is done later in conventional fashion.
 		temp_list = []
-		for i in range(len(self.ddplan_instance.new_ddplan_dm_step)):
+		for i in range(len(self.ddplan_instance.old_ddplan_dm_step)):
 			tmp=None
 			if i<1:
 				lowDM = 0
 			else:
 				lowDM = self.ddplan_instance.dm_boundaries[i-1]
 			highDM = self.ddplan_instance.dm_boundaries[i]
-			tmp = aa_py_dm(lowDM,highDM,self.ddplan_instance.new_ddplan_dm_step[i],1,self.ddplan_instance.old_ddplan_downsampling_factor[i].astype(int)*self.initial_downsampling_factor)
+			tmp = aa_py_dm(lowDM,highDM,self.ddplan_instance.old_ddplan_dm_step[i],1,self.ddplan_instance.old_ddplan_downsampling_factor[i].astype(int)*self.initial_downsampling_factor)
 			temp_list.append(tmp)
 		dm_list = np.array(temp_list,dtype=aa_py_dm)
 		# Create ddtr_plan
@@ -394,9 +383,9 @@ class Hermes(object):
 		(ts_inc, ddtr_output) = pipeline.get_buffer()
 
 		print("Dedispersion finished. Now downsampling the data.")
-		self.return_dm_time = np.empty(len(self.ddplan_instance.new_ddplan_dm_step),dtype=object)
+		self.return_dm_time = np.empty(len(self.ddplan_instance.old_ddplan_dm_step),dtype=object)
 		#for dm_step_counter in range(pipeline.ddtr_range()):
-		for dm_step_counter, dm_step in enumerate(self.ddplan_instance.new_ddplan_dm_step):
+		for dm_step_counter, dm_step in enumerate(self.ddplan_instance.old_ddplan_dm_step):
 			list_ndms = pipeline.ddtr_ndms()
 			nsamps = int(ts_inc)
 					
@@ -514,7 +503,7 @@ class Hermes(object):
 			try:
 				item = self.slice_queue.get(timeout=2)
 				if item is None:
-					tqdm.write("[Inference] Received sentinel. Exiting inference thread.")
+					print("[Inference] Received sentinel. Exiting inference thread.")
 					break
 
 				slices = item["slices"]
@@ -556,15 +545,12 @@ class Hermes(object):
 									"cols": item["cols"]
 								}, timeout=5)
 							except Full:
-								tqdm.write("[Warning] Results queue full - skipping this prediction to avoid stall.")
+								print("[Warning] Results queue full - skipping this prediction to avoid stall.")
 						batch_index += len(images)
-						self.inference_pbar.total += len(images)
-						self.inference_pbar.update(len(images))
-						self.inference_pbar.refresh()
 						
 			except Empty:
 				continue
-		tqdm.write("[Inference] Inference thread terminated.")
+		print("[Inference] Inference thread terminated.")
 					
 	#Main function to peform the search.
 	def Mask_RCNN_inference(self, index):
@@ -597,13 +583,11 @@ class Hermes(object):
 			time_index (int): Index of the time chunk.
 			dm_array (np.ndarray): Array returned by dedispersion, containing DM-time slices.
 		"""
-		
 		processor = Data_processing(self.config,dm_array)
-		
-		for dm_index in range(len(self.config.width_array)):
+		for dm_index in range(len(dm_array)):
 			processor.slice_and_normalize(dm_index)
 			slices = processor.slices_dm_time_array.copy()
-			#print('PROCESSING DM INDEX', dm_index)
+			
 			self.slice_queue.put({
 				"time_index": time_index,
 				"dm_index": dm_index,
@@ -619,24 +603,13 @@ class Hermes(object):
 		This includes time, DM, bounding box info, scores, and image paths.
 		"""
 		data_dict_list = [dict(zip(column_names,row)) for row in self.prediction_information_to_csv[1::]]
-
-		detection_df = pd.DataFrame(self.prediction_information_to_csv[1::], columns=column_names)
-	
-		if self.clustering:
-			df_ = pd.DataFrame(columns=detection_df.columns)
-			detection_df['time_inside_filterbank'] = pd.to_numeric(detection_df['time_inside_filterbank'], errors='coerce')
-			for _ , row in detection_df.iterrows():
-				t_low, t_high = float(row['time_inside_filterbank'])-(self.config.max_width*1e-6), float(row['time_inside_filterbank'])+(self.config.max_width*1e-6)
-				right_cand = detection_df.query("@t_low <= `time_inside_filterbank` <= @t_high").sort_values(by='Prediction_score', ascending=False).iloc[0,:]
-				if right_cand['time_inside_filterbank'] not in df_['time_inside_filterbank'].values:
-					df_.loc[len(df_)] = right_cand
-			detection_df = df_
-		if self.multithread:
-			detection_df.to_csv(str(self.output_directory)+"/table_detections.csv", index=False)
-		else: 
-			detection_df.to_csv(str(self.output_directory / Path(str(self.time_index)))+"/table_detections.csv", index=False)
-
+		with open(str(self.output_directory / Path(str(self.time_index)))+"/table_detections.csv", mode='w', newline ='') as file:
+			writer = csv.DictWriter(file, fieldnames = column_names)
+			writer.writeheader()
+			writer.writerows(data_dict_list)
+			
 	#Function to plot the burst candidates and save key information.
+	
 	def plot_collected_predictions(self):
 		"""
 		Plots and saves all predictions collected during inference.
@@ -677,7 +650,7 @@ class Hermes(object):
 				col_idx = slice_idx % self.data_processing.slices_num_of_cols
 
 				dm_val = ((DM + (self.config.image_size - self.config.overlap) * row_idx) *
-					      self.ddplan_instance.new_ddplan_dm_step[dm_index])
+					      self.ddplan_instance.old_ddplan_dm_step[dm_index])
 				time_val = ((self.config.image_size - self.config.overlap) * col_idx + time) * \
 					       self.config.tsamp * self.initial_downsampling_factor * 2**dm_index
 
@@ -696,8 +669,8 @@ class Hermes(object):
 				plt.vlines(box[0], box[1], box[3], colors=color, linestyles='dashed')
 				plt.vlines(box[2], box[1], box[3], colors=color, linestyles='dashed')
 				
-			lower_DM = ((self.config.image_size - self.config.overlap) * row_idx) * self.ddplan_instance.new_ddplan_dm_step[dm_index]
-			upper_DM = ((self.config.image_size - self.config.overlap) * (row_idx + 1)) * self.ddplan_instance.new_ddplan_dm_step[dm_index]
+			lower_DM = ((self.config.image_size - self.config.overlap) * row_idx) * self.ddplan_instance.old_ddplan_dm_step[dm_index]
+			upper_DM = ((self.config.image_size - self.config.overlap) * (row_idx + 1)) * self.ddplan_instance.old_ddplan_dm_step[dm_index]
 			
 			lower_time = -(self.config.tsamp * self.initial_downsampling_factor * self.config.image_size * 2**dm_index) / 2
 			upper_time = -lower_time
@@ -714,8 +687,7 @@ class Hermes(object):
 
 			plt.close()
 			self.counter += 1
-		
-	
+			
 			
 	def _plot_prediction_item(self, item):
 		"""
@@ -737,7 +709,6 @@ class Hermes(object):
 		image_np = image.numpy()
 		image_np = image_np[0]
 
-
 		plt.figure(figsize=(8, 8))
 		plt.imshow(image_np, origin="lower", aspect="auto", vmin=0, vmax=255)
 
@@ -755,27 +726,15 @@ class Hermes(object):
 			DM = DM[0] if len(DM) else 0
 			time = time[0] if len(time) else 0
 			
-			#width = self.config.width_array[time_index]
+			width = self.config.width_array[time_index]
 			
 			row_idx = slice_idx // cols
 			col_idx = slice_idx % cols
-			
-			if dm_index + 1 >= len(self.ddplan_instance.new_ddplan_dm_step):
-				redownsample_factor = 2 ** (1+dm_index-len(self.ddplan_instance.new_ddplan_dm_step))
-				dm_index = len(self.ddplan_instance.new_ddplan_dm_step) - 1
-				
-			else:
-				redownsample_factor = 1
 
 			dm_val = ((DM + (self.config.image_size - self.config.overlap) * row_idx) *
-				      self.ddplan_instance.new_ddplan_dm_step[dm_index]*redownsample_factor)
+				      self.ddplan_instance.old_ddplan_dm_step[dm_index])
 			time_val = ((self.config.image_size - self.config.overlap) * col_idx + time) * \
-				       self.config.tsamp * 2**dm_index * redownsample_factor * self.initial_downsampling_factor #TODO MAYBE?
-			
-			width = self.config.width_array[dm_index] * redownsample_factor
-			
-			#print('THIS IS RUNNING',dm_val,time_val)
-
+				       self.config.tsamp * self.initial_downsampling_factor * 2**dm_index
 
 			filename = str(self.output_directory) + f"/{self.counter}_{width}_{round(dm_val, 2)}_{round(time_val, 3)}_{slice_idx}.png"
 
@@ -792,10 +751,10 @@ class Hermes(object):
 			plt.vlines(box[0], box[1], box[3], colors=color, linestyles='dashed')
 			plt.vlines(box[2], box[1], box[3], colors=color, linestyles='dashed')
 			
-		lower_DM = ((self.config.image_size - self.config.overlap) * row_idx) * self.ddplan_instance.new_ddplan_dm_step[dm_index] * redownsample_factor
-		upper_DM = ((self.config.image_size - self.config.overlap) * (row_idx + 1)) * self.ddplan_instance.new_ddplan_dm_step[dm_index]* redownsample_factor
+		lower_DM = ((self.config.image_size - self.config.overlap) * row_idx) * self.ddplan_instance.old_ddplan_dm_step[dm_index]
+		upper_DM = ((self.config.image_size - self.config.overlap) * (row_idx + 1)) * self.ddplan_instance.old_ddplan_dm_step[dm_index]
 		
-		lower_time = -(self.config.tsamp * self.initial_downsampling_factor * self.config.image_size * 2**dm_index * redownsample_factor) / 2
+		lower_time = -(self.config.tsamp * self.initial_downsampling_factor * self.config.image_size * 2**dm_index) / 2
 		upper_time = -lower_time
 
 		plt.xticks([0,self.config.image_size//2,self.config.image_size],[round(lower_time,2),0,round(upper_time,2)],fontsize=15)
@@ -810,9 +769,6 @@ class Hermes(object):
 
 		plt.close()
 		self.counter += 1
-		self.plotting_pbar.total += 1
-		self.plotting_pbar.update(1)
-		
 	
 	def plot_results_pipeline(self):
 		"""
@@ -845,8 +801,6 @@ class Hermes(object):
 		self.create_ddplan()
 		self.calculate_indeces()
 		self._create_directories(len(self.file_indeces))
-		if not self.use_astro_accelerate:
-			self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 		for time_index in range(len(self.file_indeces)):
 			#Reset all the variables to keep track of the groups, downsampling factors, etc.
 			self.prediction_id = 0
@@ -858,21 +812,14 @@ class Hermes(object):
 					print("ERROR: Cannot use Astro-Accelerate with multiple chunks. Exiting...")
 					sys.exit()
 				self.aa_dedisperse_fil(str(self.filename))
-				self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 			else:
 				self.dedisperse(time_index)
+			self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 			self.model = self._initialize_model()
 			self.data_processing = Data_processing(self.config,self.return_dm_time)
 			for dm_index in range(len(self.return_dm_time)):
 				self.dm_index = dm_index
-				self._downsample_factors = self.ddplan_instance.old_ddplan_downsampling_factor[dm_index].astype(int)
 				self.Mask_RCNN_inference(dm_index)
-			
-			for counter in range(self.dm_index+1,len(self.config.width_array)):
-				self._downsample_factors *= 2
-				self.Mask_RCNN_inference(counter)
-				counter += 1
-
 			self.save_prediction_information()
 		end_time = time.time()
 		print("That took ", end_time - start_time)
@@ -895,25 +842,21 @@ class Hermes(object):
 		start_time = time.time()
 		self.create_ddplan()
 		self.calculate_indeces()
-		self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-		self.model = self._initialize_model()
 		#self._create_directories(len(self.file_indeces))
 		
-		for time_index in tqdm(range(len(self.file_indeces)), desc="Processing and submitting time chunks", position=0):
-			#print(f"Processing time index {time_index}...")
-			self.time_index = time_index
+		for time_index in range(len(self.file_indeces)):
+			print(f"Processing time index {time_index}...")
 			
 			self.original_dynamic_spectrum = utils._load_data(
 				str(self.filename), self.file_type,
 				self.file_indeces[time_index],
 				self.number_of_samples_array[time_index],
-				self.header, self.no_rfi_cleaning, self.no_zdot,
-				self.use_aa_sigproc
+				self.header, self.no_rfi_cleaning, self.no_zdot
 			)
 			
-			self.return_dm_time = np.empty(len(self.ddplan_instance.new_ddplan_dm_step), dtype=object)
+			self.return_dm_time = np.empty(len(self.ddplan_instance.old_ddplan_dm_step), dtype=object)
 			
-			for dm_step_counter, dm_step in enumerate(self.ddplan_instance.new_ddplan_dm_step):
+			for dm_step_counter, dm_step in enumerate(self.ddplan_instance.old_ddplan_dm_step):
 				if self.subbanded:
 					self.subband_data()
 					
@@ -928,7 +871,7 @@ class Hermes(object):
 						self.dynamic_spectrum, self.header.ftop, self.header.fbottom,
 						self.ddplan_instance.old_ddplan_downsampling_factor[dm_step_counter].astype(int) * self.initial_downsampling_factor * self.header.tsamp,
 						0, self.ddplan_instance.dm_boundaries[dm_step_counter],
-						self.ddplan_instance.new_ddplan_dm_step[dm_step_counter]
+						self.ddplan_instance.old_ddplan_dm_step[dm_step_counter]
 					).data
 				else:
 					self._dm_time_array = utils.transform(
@@ -936,25 +879,22 @@ class Hermes(object):
 						self.ddplan_instance.old_ddplan_downsampling_factor[dm_step_counter].astype(int) * self.initial_downsampling_factor * self.header.tsamp,
 						self.ddplan_instance.dm_boundaries[dm_step_counter - 1],
 						self.ddplan_instance.dm_boundaries[dm_step_counter],
-						self.ddplan_instance.new_ddplan_dm_step[dm_step_counter]
+						self.ddplan_instance.old_ddplan_dm_step[dm_step_counter]
 					).data
 					
 				
 				self.return_dm_time[dm_step_counter] = self.dm_time_array
 			
 			self.executor.submit(self.prepare_slices, time_index, self.return_dm_time)
-		
-		
+			
 		self.executor.shutdown(wait=True)
 		self.slice_queue.put(None)
 		self.inference_thread.join()
 		self.results_queue.put(None)
 		self.plotting_thread.join()
 		self.save_prediction_information()
-		self.inference_pbar.close()
-		self.plotting_pbar.close()
 		end_time = time.time()
-		tqdm.write(f"That took {end_time - start_time:.2f} seconds")
+		print('That took ', end_time-start_time)
 	
 
 def parse_args():
@@ -971,7 +911,6 @@ def parse_args():
 	parser.add_argument('-aa','--use-astro-accelerate', dest='use_astro_accelerate', help='Use AstroAccelerate for dedispersion', action='store_true')
 	parser.add_argument('-c','--config', help='Configuration file', default=False, required=True)
 	parser.add_argument('-p','--multithread', help='Run pipeline in multiple threads to save time.', action='store_true')
-	parser.add_argument('--use-aa-sigproc', dest='use_astro_accelerate_sigproc', help='Use AstroAccelerate with sigproc input format', action='store_true')
 	
 	return parser.parse_args()
 	
@@ -979,7 +918,7 @@ if __name__ == '__main__':
 	args = parse_args()
 	config = Config(args.config)
 	transform = transforms.Compose([Normalize_DM_time_snap(),ToTensor()])
-	hermes = Hermes(config, args.datapath, args.outdir, args.subband, transform, args.nchunk, args.norficleaning, args.nozdot, args.use_astro_accelerate, args.multithread, args.use_astro_accelerate_sigproc)
+	hermes = Hermes(config, args.datapath, args.outdir, args.subband, transform, args.nchunk, args.norficleaning, args.nozdot, args.use_astro_accelerate, args.multithread)
 	hermes.search()
 	
 	

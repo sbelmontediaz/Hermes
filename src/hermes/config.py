@@ -70,7 +70,6 @@ class Config(object):
 		self.threshold = config['threshold'] if 'threshold' in config else self.threshold
 		self.weights_directory = config['weights_directory'] if 'weights_directory' in config else self.weights_directory
 		self.resnet_weights_directory = config['resnet_weights_directory'] if 'resnet_weights_directory' in config else self.resnet_weights_directory
-		self.clustering = config['clustering'] if 'clustering' in config else False
 		
 		self.fbottom = self.ftop - self.bandwidth
 		self.width_array = self.width_step**(np.arange(np.log(self.min_width)/np.log(self.width_step),np.log(self.max_width*self.width_step)/np.log(self.width_step))).astype(int)
