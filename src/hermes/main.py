@@ -1,52 +1,55 @@
-import numpy as np
 import argparse
-import sys, os
-from config import Config
+import os
+import sys
 
 import matplotlib
+import numpy as np
+from config import Config
+
 matplotlib.use('Agg')
 
-import matplotlib.pyplot as plt
 import csv
+import functools as ft
 import glob
+import time
+from pathlib import Path
+
+import matplotlib.colors as mcolors
+import matplotlib.pyplot as plt
 import torch
 import torch.utils.data
 import torchvision
-import torchvision.transforms as transforms
-from torch.utils.data import DataLoader, Dataset
 import torchvision.models.segmentation
-from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
-import matplotlib.colors as mcolors
+import torchvision.transforms as transforms
 import utils
-from pathlib import Path
-from tqdm import tqdm
-import time
-import functools as ft
-from skimage.measure import block_reduce
 from astropy.stats import sigma_clipped_stats
+from skimage.measure import block_reduce
+from torch.utils.data import DataLoader, Dataset
+from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
+from tqdm import tqdm
+
 try:
 	from utilities.py_astro_accelerate import *
 except:
 	print("Cannot use any AstroAccelerate features. Please check your installation.")
-import pandas as pd
-
 import logging
 import math
-import glob
-from ddplan import ddplan
-from scipy.signal import savgol_filter
-from astropy.stats import sigma_clipped_stats
 import numbers
-from numpy.lib.stride_tricks import as_strided
+import threading
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
+from queue import Empty, Full, Queue
 
+import pandas as pd
+import psutil
+from astropy.stats import sigma_clipped_stats
+from ddplan import ddplan
+from numpy.lib.stride_tricks import as_strided
+from scipy.signal import savgol_filter
 from torchvision.models.detection import MaskRCNN
 from torchvision.models.detection.backbone_utils import resnet_fpn_backbone
-from collections import deque
 
-from queue import Queue, Empty, Full
-from concurrent.futures import ThreadPoolExecutor
-import threading
-import psutil
+# pylint: disable=C0301,W1202,C0209,W0703,W0631,C0103,R0914
 
 #List of colours to produce the plots.
 color_list = np.array(['tab:orange', 'tab:green', 'tab:red', 'tab:purple', 'tab:brown', 'tab:pink', 'tab:gray', 'tab:olive', 'tab:cyan','tab:blue'])
@@ -679,7 +682,7 @@ class Hermes(object):
 				dm_val = ((DM + (self.config.image_size - self.config.overlap) * row_idx) *
 					      self.ddplan_instance.new_ddplan_dm_step[dm_index])
 				time_val = ((self.config.image_size - self.config.overlap) * col_idx + time) * \
-					       self.config.tsamp * self.initial_downsampling_factor * 2**dm_index
+					       self.config.tsamp * self._post_search * 2**dm_index
 
 				filename = str(self.output_directory / Path(str(time_index))) + f"/{self.counter}_{self.width}_{round(dm_val, 2)}_{round(time_val, 3)}_{slice_idx}.png"
 
@@ -699,7 +702,7 @@ class Hermes(object):
 			lower_DM = ((self.config.image_size - self.config.overlap) * row_idx) * self.ddplan_instance.new_ddplan_dm_step[dm_index]
 			upper_DM = ((self.config.image_size - self.config.overlap) * (row_idx + 1)) * self.ddplan_instance.new_ddplan_dm_step[dm_index]
 			
-			lower_time = -(self.config.tsamp * self.initial_downsampling_factor * self.config.image_size * 2**dm_index) / 2
+			lower_time = -(self.config.tsamp * self._post_search * self.config.image_size * 2**dm_index) / 2
 			upper_time = -lower_time
 
 			plt.xticks([0,self.config.image_size//2,self.config.image_size],[round(lower_time,2),0,round(upper_time,2)],fontsize=15)
@@ -728,7 +731,6 @@ class Hermes(object):
 		image = item["image"]
 		slice_idx = item["slice_idx"]
 		dm_index = item["dm_index"]
-		time_index = item["time_index"]
 		file_offset = item["file_offset"]
 		rows = item["rows"]
 		cols = item["cols"]
@@ -754,8 +756,7 @@ class Hermes(object):
 			DM, time = np.where((image_np - np.min(image_np)) * (mask > 0.5) == np.max((image_np - np.min(image_np)) * (mask > 0.5)))
 			DM = DM[0] if len(DM) else 0
 			time = time[0] if len(time) else 0
-			
-			#width = self.config.width_array[time_index]
+
 			
 			row_idx = slice_idx // cols
 			col_idx = slice_idx % cols
@@ -839,6 +840,7 @@ class Hermes(object):
 			- Plot results
 			- Save metadata to disk
 		"""
+		self._post_search = 1
 		if self.multithread:
 			return self.search_thread()
 		start_time = time.time()
@@ -869,6 +871,7 @@ class Hermes(object):
 				self.Mask_RCNN_inference(dm_index)
 			
 			for counter in range(self.dm_index+1,len(self.config.width_array)):
+				self._post_search *= 2
 				self._downsample_factors *= 2
 				self.Mask_RCNN_inference(counter)
 				counter += 1

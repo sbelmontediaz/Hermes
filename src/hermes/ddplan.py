@@ -21,11 +21,14 @@ The script outputs a plot containing the different smearing factors at different
 
 """
 import math
-import numpy as np
+import os
+import sys
+
 import matplotlib.pyplot as plt
-import sys,os
-from config import Config
+import numpy as np
 import utils
+from config import Config
+
 
 class ddplan(object):
 
