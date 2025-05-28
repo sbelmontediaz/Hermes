@@ -621,7 +621,6 @@ class Hermes(object):
 		Saves all prediction metadata collected during a search iteration to a CSV file.
 		This includes time, DM, bounding box info, scores, and image paths.
 		"""
-		data_dict_list = [dict(zip(column_names,row)) for row in self.prediction_information_to_csv[1::]]
 
 		detection_df = pd.DataFrame(self.prediction_information_to_csv[1::], columns=column_names)
 	
