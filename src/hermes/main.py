@@ -679,7 +679,7 @@ class Hermes(object):
 				col_idx = slice_idx % self.data_processing.slices_num_of_cols
 
 				dm_val = ((DM + (self.config.image_size - self.config.overlap) * row_idx) *
-					      self.ddplan_instance.new_ddplan_dm_step[dm_index])
+					      self.ddplan_instance.new_ddplan_dm_step[dm_index] * self._post_search)
 				time_val = ((self.config.image_size - self.config.overlap) * col_idx + time) * \
 					       self.config.tsamp * self._post_search * 2**dm_index
 
@@ -698,8 +698,8 @@ class Hermes(object):
 				plt.vlines(box[0], box[1], box[3], colors=color, linestyles='dashed')
 				plt.vlines(box[2], box[1], box[3], colors=color, linestyles='dashed')
 				
-			lower_DM = ((self.config.image_size - self.config.overlap) * row_idx) * self.ddplan_instance.new_ddplan_dm_step[dm_index]
-			upper_DM = ((self.config.image_size - self.config.overlap) * (row_idx + 1)) * self.ddplan_instance.new_ddplan_dm_step[dm_index]
+			lower_DM = ((self.config.image_size - self.config.overlap) * row_idx) * self.ddplan_instance.new_ddplan_dm_step[dm_index] * self._post_search
+			upper_DM = ((self.config.image_size - self.config.overlap) * (row_idx + 1)) * self.ddplan_instance.new_ddplan_dm_step[dm_index] * self._post_search
 			
 			lower_time = -(self.config.tsamp * self._post_search * self.config.image_size * 2**dm_index) / 2
 			upper_time = -lower_time
