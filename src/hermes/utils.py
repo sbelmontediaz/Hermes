@@ -1,20 +1,21 @@
 import logging
-import numpy as np
-import matplotlib.pyplot as plt
-import sigpyproc,sigpyproc.readers
-import sys,os
+import os
+import sys
 import time
+from typing import Callable, Iterator, Optional, Tuple, Union
 
+import matplotlib.pyplot as plt
+import numpy as np
+import sigpyproc
+import sigpyproc.readers
 from numpy import typing as npt
-from typing import Union, Callable, Tuple, Iterator, Optional
-from sigpyproc.core import stats, kernels
-from sigpyproc.core.rfi import RFIMask
-
 from sigpyproc.block import FilterbankBlock
+from sigpyproc.core import kernels, stats
+from sigpyproc.core.rfi import RFIMask
 from sigpyproc.core.stats import ChannelStats
 from sigpyproc.header import Header
-
 from utilities.py_astro_accelerate import *
+
 
 def create_filterbank_block(data: np.ndarray, header: Header) -> FilterbankBlock:
     """

@@ -3,11 +3,13 @@
 #
 #
 import sys
+
 if (sys.version_info < (3, 0)):
     print("ERROR: Python version less than 3.0. Exiting...")
     sys.exit()
 
 import ctypes
+
 import numpy as np
 
 try:

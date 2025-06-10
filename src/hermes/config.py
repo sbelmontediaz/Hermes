@@ -1,6 +1,8 @@
+import os
+
 import numpy as np
 import yaml
-import os
+
 
 class Config(object):
 
