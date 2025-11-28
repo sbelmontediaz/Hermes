@@ -54,7 +54,7 @@ from torchvision.models.detection.backbone_utils import resnet_fpn_backbone
 #List of colours to produce the plots.
 color_list = np.array(['tab:orange', 'tab:green', 'tab:red', 'tab:purple', 'tab:brown', 'tab:pink', 'tab:gray', 'tab:olive', 'tab:cyan','tab:blue'])
 #Headers of the information saved in the csv file.
-column_names = ['ID','DM_time_range','width_(\u00B5s)', 'time_(s)', 'DM', 'Prediction_score' ,'Burst in image', 'slice_num','rows_in_slice','cols_in_slice','filterbank_file','time_inside_filterbank','ml_prediction_image_name']
+column_names = ['ID','DM_time_range','width_(\u00B5s)', 'time_(s)', 'DM', 'Prediction_score' ,'Burst in image', 'slice_num','rows_in_slice','cols_in_slice','filterbank_file','time_inside_filterbank','ml_prediction_image_name', 'box_xmin', 'box_ymin', 'box_xmax', 'box_ymax', 'bowtie_factor']
 
 #Class to perform data processing of the DM-time transform. It performs the downsampling, slicing and normalisation.
 class Data_processing(object):
@@ -217,7 +217,7 @@ class Hermes(object):
 		self.group_index = 0
 		self.prediction_id = 0
 		self.prediction_information = []
-		self.prediction_information_to_csv = np.zeros((1,13))
+		self.prediction_information_to_csv = np.zeros((1,18))
 		self.width = self.config.min_width
 		self.window_idx = int(np.log(self.width)/np.log(self.config.width_step))
 		self.prediction_idx = np.zeros((1))
@@ -670,10 +670,15 @@ class Hermes(object):
 				color = mcolors.TABLEAU_COLORS[color_list[k]]
 
 				binary_mask += (mask > 0.5).astype(np.uint8)
-
-				DM, time = np.where((image_np - np.min(image_np)) * (mask > 0.5) == np.max((image_np - np.min(image_np)) * (mask > 0.5)))
-				DM = DM[0] if len(DM) else 0
-				time = time[0] if len(time) else 0
+				
+				#Old way to calculate DM, based on max value inside the segmentation mask
+				#DM, time = np.where((image_np - np.min(image_np)) * (mask > 0.5) == np.max((image_np - np.min(image_np)) * (mask > 0.5)))
+				#DM = DM[0] if len(DM) else 0
+				#time = time[0] if len(time) else 0
+				
+				#New implementation of DM and time localisation based on the central value of the boundary box (xmin,ymin,xmax,ymax)
+				DM = box[1] + round((box[3] - box[1])/2)
+				time = box[0] + round((box[2] - box[0])/2)
 
 				row_idx = slice_idx // self.data_processing.slices_num_of_cols
 				col_idx = slice_idx % self.data_processing.slices_num_of_cols
@@ -682,6 +687,19 @@ class Hermes(object):
 					      self.ddplan_instance.new_ddplan_dm_step[dm_index] * self._post_search)
 				time_val = ((self.config.image_size - self.config.overlap) * col_idx + time) * \
 					       self.config.tsamp * self._post_search * 2**dm_index
+				
+				#Calculate new metric: bowtie_factor, a is boundary box region and b is a small region around center
+				a = image_np[int(box[1]):int(box[3]),int(box[0]):int(box[2])].copy()
+				center = [round((box[3]-box[1])/2),round((box[2]-box[0])/2)]
+				b = a[int(center[0]-10):int(center[0]+10),int(center[1]-10):int(center[1]+10)]
+				a1 = a[0:int(center[0]-10),0:int(center[1]-10)]
+				a2 = a[int(center[0]+10)::,int(center[1]+10)::]
+				
+				max_b = np.max(b)
+				means = (np.mean(a1)+np.mean(a2))/2
+				standard_deviations = (np.std(a1)+np.std(a2))/2
+				
+				bowtie_factor = (max_b - means) / standard_deviations
 
 				filename = str(self.output_directory / Path(str(time_index))) + f"/{self.counter}_{self.width}_{round(dm_val, 2)}_{round(time_val, 3)}_{slice_idx}.png"
 
@@ -689,7 +707,8 @@ class Hermes(object):
 					self.prediction_id, dm_index, self.width, time_val, dm_val,
 					score.item(), len(prediction['scores']), slice_idx,
 					self.data_processing.slices_num_of_rows, self.data_processing.slices_num_of_cols,
-					str(self.filename), time_val + file_offset, filename
+					str(self.filename), time_val + file_offset, filename, box[0], box[1], box[2], box[3],
+					bowtie_factor
 				]))
 				self.prediction_id += 1
 
@@ -751,15 +770,20 @@ class Hermes(object):
 			color = mcolors.TABLEAU_COLORS[color_list[k]]
 
 			binary_mask += (mask > 0.5).astype(np.uint8)
-
-			DM, time = np.where((image_np - np.min(image_np)) * (mask > 0.5) == np.max((image_np - np.min(image_np)) * (mask > 0.5)))
-			DM = DM[0] if len(DM) else 0
-			time = time[0] if len(time) else 0
-
 			
+			#Old way to calculate DM, based on max value inside the segmentation mask
+			#DM, time = np.where((image_np - np.min(image_np)) * (mask > 0.5) == np.max((image_np - np.min(image_np)) * (mask > 0.5)))
+			#DM = DM[0] if len(DM) else 0
+			#time = time[0] if len(time) else 0
+			
+			#New implementation of DM and time localisation based on the central value of the boundary box (xmin,ymin,xmax,ymax)
+			DM = box[1] + round((box[3] - box[1])/2)
+			time = box[0] + round((box[2] - box[0])/2)
+
 			row_idx = slice_idx // cols
 			col_idx = slice_idx % cols
 			
+
 			if dm_index + 1 >= len(self.ddplan_instance.new_ddplan_dm_step):
 				redownsample_factor = 2 ** (1+dm_index-len(self.ddplan_instance.new_ddplan_dm_step))
 				dm_index = len(self.ddplan_instance.new_ddplan_dm_step) - 1
@@ -774,7 +798,18 @@ class Hermes(object):
 			
 			width = self.config.width_array[dm_index] * redownsample_factor
 			
-			#print('THIS IS RUNNING',dm_val,time_val)
+			#Calculate new metric: bowtie_factor, a is boundary box region and b is a small region around center
+			a = image_np[int(box[1]):int(box[3]),int(box[0]):int(box[2])].copy()
+			center = [round((box[3]-box[1])/2),round((box[2]-box[0])/2)]
+			b = a[int(center[0]-10):int(center[0]+10),int(center[1]-10):int(center[1]+10)]
+			a1 = a[0:int(center[0]-10),0:int(center[1]-10)]
+			a2 = a[int(center[0]+10)::,int(center[1]+10)::]
+			
+			max_b = np.max(b)
+			means = (np.mean(a1)+np.mean(a2))/2
+			standard_deviations = (np.std(a1)+np.std(a2))/2
+			
+			bowtie_factor = (max_b - means) / standard_deviations
 
 
 			filename = str(self.output_directory) + f"/{self.counter}_{width}_{round(dm_val, 2)}_{round(time_val, 3)}_{slice_idx}.png"
@@ -783,7 +818,8 @@ class Hermes(object):
 				self.prediction_id, dm_index, width, time_val, dm_val,
 				score.item(), len(prediction['scores']), slice_idx,
 				rows, cols,
-				str(self.filename), time_val + file_offset, filename
+				str(self.filename), time_val + file_offset, filename, box[0], box[1], box[2], box[3],
+				bowtie_factor
 			]))
 			self.prediction_id += 1
 
@@ -852,7 +888,7 @@ class Hermes(object):
 			#Reset all the variables to keep track of the groups, downsampling factors, etc.
 			self.prediction_id = 0
 			self.counter = 0
-			self.prediction_information_to_csv = np.zeros((1,13))
+			self.prediction_information_to_csv = np.zeros((1,18))
 			self.time_index = time_index
 			if self.use_astro_accelerate:
 				if len(self.file_indeces) > 1:
