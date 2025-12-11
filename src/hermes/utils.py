@@ -362,8 +362,7 @@ def transform(data, fch1, fchn, tsamp, dm_min, dm_max, dm_step):
 	out: OutputBlock
 		Object that wraps a 2D array with the dedispersed data.
 	"""
-	if not dm_min >= 0:
-		raise ValueError("dm_min must be >= 0")
+
 	if not dm_max >= dm_min:
 		raise ValueError("dm_max must be >= dm_min")
 

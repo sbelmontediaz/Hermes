@@ -302,7 +302,7 @@ class ddplan(object):
 		print("DM min\tDM max\tDM step\tNum of DMs Percentage of DMs")
 		for i in range(len(self.dm_trials)):
 			if i < 1:
-				print(0,'\t',round(self.dm_boundaries[i],1),'\t',round(self.new_ddplan_dm_step[i],3),'\t',self.dm_trials[i],'\t',round(self.dm_trials[i]/self.dm_trials.sum()*100,1),'%')
+				print(self.config.dm_min,'\t',round(self.dm_boundaries[i],1),'\t',round(self.new_ddplan_dm_step[i],3),'\t',self.dm_trials[i],'\t',round(self.dm_trials[i]/self.dm_trials.sum()*100,1),'%')
 			else:
 				print(round(self.dm_boundaries[i-1],1),'\t',round(self.dm_boundaries[i],1),'\t',round(self.new_ddplan_dm_step[i],3),'\t',self.dm_trials[i],'\t',round(self.dm_trials[i]/self.dm_trials.sum()*100,1),'%')
 		print("Total number of DMs searched: ", self.dm_trials.sum())
