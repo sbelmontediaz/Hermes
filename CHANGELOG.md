@@ -1,6 +1,6 @@
 # V 1.0.0
 - Modified DM and time localisation to be equal to the centre of the boundary box
-- Added functionality to dedisperse at DMs lesser than zero.
+- Added functionality to dedisperse at DMs less than zero.
 - Exporting box-parameters and bowtie factor in the output CSV file
 - Bug-fix for right labels after downsampling
 
