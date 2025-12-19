@@ -319,7 +319,7 @@ class Hermes(object):
 			#Find how many dm bins you require for the given DM chunk in the ddplan
 			if dm_step_counter < 1:
 				print("Creating DM-time array for DMs ",0, self.ddplan_instance.dm_boundaries[dm_step_counter])
-				dm_bins = int(np.ceil(self.ddplan_instance.dm_boundaries[dm_step_counter]/dm_step)) + 1
+				dm_bins = int(np.ceil(self.ddplan_instance.dm_boundaries[dm_step_counter]/dm_step)) - int(self.config.dm_min/dm_step) + 1
 			else:
 				dm_bins = int(np.ceil(self.ddplan_instance.dm_boundaries[dm_step_counter]/dm_step)) - int(self.ddplan_instance.dm_boundaries[dm_step_counter-1]/dm_step) +1
 				print("Creating DM-time array for DMs ", self.ddplan_instance.dm_boundaries[dm_step_counter-1], self.ddplan_instance.dm_boundaries[dm_step_counter])
@@ -330,7 +330,7 @@ class Hermes(object):
 			self.dynamic_spectrum = block_reduce(self.original_dynamic_spectrum, block_size=(1,self.ddplan_instance.old_ddplan_downsampling_factor[dm_step_counter].astype(int)*self.initial_downsampling_factor),func=np.mean)
 			print("Dedispersing the file.")
 			if dm_step_counter < 1:
-				dm_time_array = utils.transform(self.dynamic_spectrum, self.header.ftop,self.header.fbottom,self.ddplan_instance.old_ddplan_downsampling_factor[dm_step_counter].astype(int)*self.initial_downsampling_factor*self.header.tsamp, 0, self.ddplan_instance.dm_boundaries[dm_step_counter], self.ddplan_instance.new_ddplan_dm_step[dm_step_counter]).data
+				dm_time_array = utils.transform(self.dynamic_spectrum, self.header.ftop,self.header.fbottom,self.ddplan_instance.old_ddplan_downsampling_factor[dm_step_counter].astype(int)*self.initial_downsampling_factor*self.header.tsamp, config.dm_min, self.ddplan_instance.dm_boundaries[dm_step_counter], self.ddplan_instance.new_ddplan_dm_step[dm_step_counter]).data
 			else:
 				dm_time_array = utils.transform(self.dynamic_spectrum, self.header.ftop,self.header.fbottom,self.ddplan_instance.old_ddplan_downsampling_factor[dm_step_counter].astype(int)*self.initial_downsampling_factor*self.header.tsamp, self.ddplan_instance.dm_boundaries[dm_step_counter-1], self.ddplan_instance.dm_boundaries[dm_step_counter], self.ddplan_instance.new_ddplan_dm_step[dm_step_counter]).data
 			self._dm_time_array = np.hstack((self.dm_time_array,dm_time_array))
@@ -362,7 +362,7 @@ class Hermes(object):
 		for i in range(len(self.ddplan_instance.new_ddplan_dm_step)):
 			tmp=None
 			if i<1:
-				lowDM = 0
+				lowDM = self.config.dm_min
 			else:
 				lowDM = self.ddplan_instance.dm_boundaries[i-1]
 			highDM = self.ddplan_instance.dm_boundaries[i]
@@ -684,7 +684,7 @@ class Hermes(object):
 				col_idx = slice_idx % self.data_processing.slices_num_of_cols
 
 				dm_val = ((DM + (self.config.image_size - self.config.overlap) * row_idx) *
-					      self.ddplan_instance.new_ddplan_dm_step[dm_index] * self._post_search)
+					      self.ddplan_instance.new_ddplan_dm_step[dm_index] * self._post_search) + self.config.dm_min
 				time_val = ((self.config.image_size - self.config.overlap) * col_idx + time) * \
 					       self.config.tsamp * self._post_search * 2**dm_index
 				
@@ -717,7 +717,7 @@ class Hermes(object):
 				plt.vlines(box[0], box[1], box[3], colors=color, linestyles='dashed')
 				plt.vlines(box[2], box[1], box[3], colors=color, linestyles='dashed')
 				
-			lower_DM = ((self.config.image_size - self.config.overlap) * row_idx) * self.ddplan_instance.new_ddplan_dm_step[dm_index] * self._post_search
+			lower_DM = ((self.config.image_size - self.config.overlap) * row_idx) * self.ddplan_instance.new_ddplan_dm_step[dm_index] * self._post_search + self.config.dm_min
 			upper_DM = ((self.config.image_size - self.config.overlap) * (row_idx + 1)) * self.ddplan_instance.new_ddplan_dm_step[dm_index] * self._post_search
 			
 			lower_time = -(self.config.tsamp * self._post_search * self.config.image_size * 2**dm_index) / 2
@@ -792,7 +792,7 @@ class Hermes(object):
 				redownsample_factor = 1
 
 			dm_val = ((DM + (self.config.image_size - self.config.overlap) * row_idx) *
-				      self.ddplan_instance.new_ddplan_dm_step[dm_index]*redownsample_factor)
+				      self.ddplan_instance.new_ddplan_dm_step[dm_index]*redownsample_factor) + self.config.dm_min
 			time_val = ((self.config.image_size - self.config.overlap) * col_idx + time) * \
 				       self.config.tsamp * 2**dm_index * redownsample_factor * self.initial_downsampling_factor #TODO MAYBE?
 			
@@ -828,7 +828,7 @@ class Hermes(object):
 			plt.vlines(box[0], box[1], box[3], colors=color, linestyles='dashed')
 			plt.vlines(box[2], box[1], box[3], colors=color, linestyles='dashed')
 			
-		lower_DM = ((self.config.image_size - self.config.overlap) * row_idx) * self.ddplan_instance.new_ddplan_dm_step[dm_index] * redownsample_factor
+		lower_DM = ((self.config.image_size - self.config.overlap) * row_idx) * self.ddplan_instance.new_ddplan_dm_step[dm_index] * redownsample_factor + self.config.dm_min
 		upper_DM = ((self.config.image_size - self.config.overlap) * (row_idx + 1)) * self.ddplan_instance.new_ddplan_dm_step[dm_index]* redownsample_factor
 		
 		lower_time = -(self.config.tsamp * self.initial_downsampling_factor * self.config.image_size * 2**dm_index * redownsample_factor) / 2
